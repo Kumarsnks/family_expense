@@ -75,17 +75,17 @@ def load_expenses():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
             data = json.load(f)
-        df = pd.DataFrame(data)
-        if not df.empty:
-            df["date"] = pd.to_datetime(df["date"]).dt.date
-            df["amount"] = pd.to_numeric(df["amount"])
-        return df
+        df_load = pd.DataFrame(data)
+        if not df_load.empty:
+            df_load["date"] = pd.to_datetime(df_load["date"]).df_load.date
+            df_load["amount"] = pd.to_numeric(df_load["amount"])
+        return df_load
     return pd.DataFrame(
         columns=["id", "date", "category", "description", "amount", "member", "payment_method", "notes"])
 
 
-def save_expenses(df):
-    records = df.copy()
+def save_expenses(df_save_exp):
+    records = df_save_exp.copy()
     records["date"] = records["date"].astype(str)
     with open(DATA_FILE, "w") as f:
         json.dump(records.to_dict("records"), f, indent=2)
@@ -94,11 +94,11 @@ def save_expenses(df):
 def load_config():
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r") as f:
-            cfg = json.load(f)
-        cfg.setdefault("categories", DEFAULT_CATEGORIES.copy())
-        cfg.setdefault("members", DEFAULT_MEMBERS.copy())
-        cfg.setdefault("saving_types", DEFAULT_SAVING_TYPES.copy())
-        return cfg
+            cfg_load = json.load(f)
+        cfg_load.setdefault("categories", DEFAULT_CATEGORIES.copy())
+        cfg_load.setdefault("members", DEFAULT_MEMBERS.copy())
+        cfg_load.setdefault("saving_types", DEFAULT_SAVING_TYPES.copy())
+        return cfg_load
     return {
         "limits": {}, "currency": "₹", "family_name": "My Family",
         "categories": DEFAULT_CATEGORIES.copy(),
@@ -107,13 +107,13 @@ def load_config():
     }
 
 
-def save_config(cfg):
+def save_config(cfg_save):
     with open(CONFIG_FILE, "w") as f:
-        json.dump(cfg, f, indent=2)
+        json.dump(cfg_save, f, indent=2)
 
 
-def next_id(df):
-    return int(df["id"].max()) + 1 if not df.empty else 1
+def next_id(df_next):
+    return int(df_next["id"].max()) + 1 if not df_next.empty else 1
 
 
 def get_categories(): return st.session_state.config.get("categories", DEFAULT_CATEGORIES)
@@ -122,7 +122,9 @@ def get_categories(): return st.session_state.config.get("categories", DEFAULT_C
 def get_members():    return st.session_state.config.get("members", DEFAULT_MEMBERS)
 
 
-def load_json(file, default=[]):
+def load_json(file, default=None):
+    if default is None:
+        default = []
     if os.path.exists(file):
         with open(file, "r") as f:
             return json.load(f)
@@ -136,11 +138,11 @@ def save_json(file, data):
 
 # ─── PDF Generator ────────────────────────────────────────────────────────────
 
-def generate_pdf(df, start_date, end_date, config):
+def generate_pdf(pdf_df, pdf_start_date, pdf_end_date, config):
     buf = BytesIO()
-    currency = config.get("currency", "₹")
-    fname = config.get("family_name", "My Family")
-    limits = config.get("limits", {})
+    d_currency = config.get("currency", "₹")
+    d_fam_name = config.get("family_name", "My Family")
+    d_limits = config.get("limits", {})
 
     doc = SimpleDocTemplate(buf, pagesize=A4,
                             leftMargin=1.5 * cm, rightMargin=1.5 * cm,
@@ -154,19 +156,19 @@ def generate_pdf(df, start_date, end_date, config):
                                fontSize=11, textColor=colors.HexColor("#5a5a5a"),
                                alignment=TA_CENTER, spaceAfter=2)
 
-    story.append(Paragraph(f"{fname} — Expense Report", title_style))
-    story.append(Paragraph(f"Period: {start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')}", sub_style))
+    story.append(Paragraph(f"{d_fam_name} — Expense Report", title_style))
+    story.append(Paragraph(f"Period: {pdf_start_date.strftime('%d %b %Y')} to {pdf_end_date.strftime('%d %b %Y')}", sub_style))
     story.append(Paragraph(f"Generated on {datetime.now().strftime('%d %b %Y, %I:%M %p')}", sub_style))
     story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor("#1e3a5f"), spaceAfter=10))
 
-    total = df["amount"].sum()
-    daily_avg = total / max((end_date - start_date).days + 1, 1)
-    top_cat = df.groupby("category")["amount"].sum().idxmax() if not df.empty else "—"
+    total = pdf_df["amount"].sum()
+    daily_avg = total / max((pdf_end_date - pdf_start_date).days + 1, 1)
+    top_cat = pdf_df.groupby("category")["amount"].sum().idxmax() if not pdf_df.empty else "—"
 
     summary_data = [
-        ["Total Spending", f"{currency} {total:,.2f}"],
-        ["Daily Average", f"{currency} {daily_avg:,.2f}"],
-        ["Transactions", str(len(df))],
+        ["Total Spending", f"{d_currency} {total:,.2f}"],
+        ["Daily Average", f"{d_currency} {daily_avg:,.2f}"],
+        ["Transactions", str(len(pdf_df))],
         ["Top Category", top_cat],
     ]
     st_ = Table(summary_data, hAlign="LEFT")
@@ -184,17 +186,17 @@ def generate_pdf(df, start_date, end_date, config):
     story.append(Spacer(1, 14))
 
     story.append(Paragraph("Category Breakdown", styles["Heading2"]))
-    cat_df = df.groupby("category")["amount"].sum().reset_index().sort_values("amount", ascending=False)
-    cat_data = [["Category", f"Amount ({currency})", "% of Total", "Limit", "Status"]]
-    for _, row in cat_df.iterrows():
-        pct = (row["amount"] / total * 100) if total else 0
-        limit = limits.get(row["category"], 0)
+    cat_df = pdf_df.groupby("category")["amount"].sum().reset_index().sort_values("amount", ascending=False)
+    cat_data = [["Category", f"Amount ({d_currency})", "% of Total", "Limit", "Status"]]
+    for _, cat_row in cat_df.iterrows():
+        cat_pct = (cat_row["amount"] / total * 100) if total else 0
+        limit = d_limits.get(cat_row["category"], 0)
         cat_data.append([
-            row["category"],
-            f"{currency} {row['amount']:,.2f}",
-            f"{pct:.1f}%",
-            f"{currency} {limit:,.2f}" if limit else "—",
-            ("OK" if row["amount"] <= limit else "Over") if limit else "",
+            cat_row["category"],
+            f"{d_currency} {cat_row['amount']:,.2f}",
+            f"{cat_pct:.1f}%",
+            f"{d_currency} {limit:,.2f}" if limit else "—",
+            ("OK" if cat_row["amount"] <= limit else "Over") if limit else "",
         ])
     ct_ = Table(cat_data, colWidths=[5.5 * cm, 3 * cm, 2.2 * cm, 3 * cm, 1.8 * cm])
     ct_.setStyle(TableStyle([
@@ -213,12 +215,12 @@ def generate_pdf(df, start_date, end_date, config):
 
     story.append(Paragraph("All Transactions", styles["Heading2"]))
     txn_data = [["Date", "Category", "Description", "Member", "Payment", f"Amount ({currency})"]]
-    for _, row in df.sort_values("date").iterrows():
+    for _, txn_row in pdf_df.sort_values("date").iterrows():
         txn_data.append([
-            str(row["date"]), row["category"],
-            str(row.get("description", ""))[:35],
-            row.get("member", ""), row.get("payment_method", ""),
-            f"{row['amount']:,.2f}",
+            str(txn_row["date"]), row["category"],
+            str(txn_row.get("description", ""))[:35],
+            txn_row.get("member", ""), txn_row.get("payment_method", ""),
+            f"{txn_row['amount']:,.2f}",
         ])
     txn_data.append(["", "", "", "", "TOTAL", f"{total:,.2f}"])
 
@@ -289,8 +291,7 @@ with st.sidebar:
             (df_side["date"] >= ms) & (df_side["date"] <= today)
         ]["amount"].sum()
 
-    st.metric("This Month", f"{currency} {month_total:,.0f}")
-    st.caption(f"{len(get_categories())} categories · {len(get_members())} members")
+    st.metric("This Month Expense", f"{currency} {month_total:,.0f}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 🏠 DASHBOARD
@@ -455,7 +456,7 @@ elif st.session_state.page == "➕ Add Expense":
                   "member": member, "payment_method": payment, "notes": notes}
             st.session_state.df = pd.concat([df, pd.DataFrame([nr])], ignore_index=True)
             save_expenses(st.session_state.df)
-            st.success(f"✅ Saved {currency} {amount:,.2f} for **{category}**")
+            st.success(f"✅ Expense {currency} {amount:,.2f} for **{category}**")
 
             limits = cfg.get("limits", {})
             if category in limits:
