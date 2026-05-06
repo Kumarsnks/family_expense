@@ -284,6 +284,18 @@ with st.sidebar:
     df_side = st.session_state.df
     today = date.today()
 
+    # ── Monthly Salary ──
+    salary_list = st.session_state.salary if "salary" in st.session_state else []
+
+    current_salary = next(
+        (s["amount"] for s in salary_list
+         if s["month"] == today.month and s["year"] == today.year),
+        0
+    )
+
+    st.metric("This Month Salary", f"{currency} {current_salary:,.0f}")
+
+    # ── Monthly Expense ──
     month_total = 0
     if not df_side.empty:
         ms = date(today.year, today.month, 1)
@@ -292,6 +304,15 @@ with st.sidebar:
         ]["amount"].sum()
 
     st.metric("This Month Expense", f"{currency} {month_total:,.0f}")
+
+    # ── Remaining Balance ──
+    remaining = current_salary - month_total
+
+    st.metric(
+        "Remaining Balance",
+        f"{currency} {remaining:,.0f}",
+        delta=f"{remaining:,.0f}",
+        delta_color="normal")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 🏠 DASHBOARD
