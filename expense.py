@@ -5,15 +5,17 @@ import os
 from datetime import datetime, date, timedelta
 from io import BytesIO
 import plotly.express as px
-import plotly.graph_objects as go
-from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable,
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+    PageBreak
 )
-from reportlab.lib.enums import TA_CENTER
 from streamlit_cookies_manager import EncryptedCookieManager
 
 
@@ -47,13 +49,13 @@ SAVINGS_FILE = ""
 # ── Defaults (used only when config has no saved list yet)
 DEFAULT_SAVING_GOAL = 60000
 DEFAULT_CATEGORIES = [
-    "🛒 Groceries", "🍽️ Dining Out", "🚗 Transport", "💊 Healthcare",
+    "🛒 Groceries", "🍽️ Dining Out", "🚗 Transport", "💊 Healthcare", "🥤 Chats/Juice",
     "🍖 Meat", "💐 Flowers", "🥦 Vegetables", "🥛 Milk", "🍎 Fruits",
     "🎓 Education", "🎮 Entertainment", "👗 Clothing", "🏠 Utilities",
     "🛠️ Home Maintenance", "📦 Shopping", "✈️ Travel", "💰 Savings/Investment",
-    "🎁 Gifts", "📱 Subscriptions", "🏋️ Fitness", "🥤 Chats/Juice",
+    "🎁 Gifts", "📱 Subscriptions", "🏋️ Fitness",
     "📚 Books/Learning", "🔧 Miscellaneous"]
-DEFAULT_MEMBERS = ["Shared", "Wife", "Parent", "Child 1", "Child 2", "Friends"]
+DEFAULT_MEMBERS = ["Shared", "Husband", "Wife", "Parent", "Child 1", "Child 2", "Friends"]
 PAYMENT_METHODS = ["UPI", "Cash", "Credit Card", "Debit Card", "Net Banking", "Other"]
 CATEGORY_EMOJIS = ["🛒", "🍽️", "🚗", "💊", "🎓", "🎮", "👗", "🏠", "🛠️", "📦", "✈️", "💰", "🐾", "🎁", "📱",
                    "🏋️", "📚", "🔧", "🎯", "🌿", "🏥", "🧴", "🍕", "🍖", "☕", "🎵", "🖥️", "📷", "🧹", "🚿",
@@ -192,114 +194,361 @@ def save_json(file, data):
 
 # ─── PDF Generator ────────────────────────────────────────────────────────────
 
-def generate_pdf(pdf_df, pdf_start_date, pdf_end_date, config):
-    buf = BytesIO()
-    d_currency = config.get("currency", "₹")
-    d_fam_name = config.get("family_name", "My Family")
-    d_limits = config.get("limits", {})
+def add_pdf_footer(canvas, doc):
 
-    doc = SimpleDocTemplate(buf, pagesize=A4,
-                            leftMargin=1.5 * cm, rightMargin=1.5 * cm,
-                            topMargin=1.5 * cm, bottomMargin=1.5 * cm)
+    canvas.saveState()
+
+    width, height = A4
+
+    # ─────────────────────────────
+    # WATERMARK
+    # ─────────────────────────────
+    canvas.setFont("Helvetica", 45)
+    canvas.setFillColor(colors.lightgrey)
+
+    canvas.rotate(45)
+
+    canvas.drawCentredString(
+        450,
+        50,
+        "CONFIDENTIAL"
+    )
+
+    canvas.rotate(-45)
+
+    # ─────────────────────────────
+    # BORDER
+    # ─────────────────────────────
+    canvas.setStrokeColor(colors.grey)
+
+    canvas.rect(
+        15,
+        15,
+        width - 30,
+        height - 30
+    )
+
+    # ─────────────────────────────
+    # FOOTER
+    # ─────────────────────────────
+    canvas.setFont("Helvetica", 9)
+
+    canvas.setFillColor(colors.black)
+
+    canvas.drawString(
+        25,
+        20,
+        "Financial Report"
+    )
+
+    canvas.drawRightString(
+        width - 25,
+        20,
+        f"Page {doc.page}"
+    )
+
+    canvas.restoreState()
+
+def generate_pdf(filtered, start_date, end_date, cfg, savings, loans):
+
+    buffer = BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=25,
+        leftMargin=25,
+        topMargin=40,
+        bottomMargin=35
+    )
+
     styles = getSampleStyleSheet()
-    story = []
+    elements = []
 
-    title_style = ParagraphStyle("TS", parent=styles["Title"],
-                                 fontSize=20, textColor=colors.HexColor("#1e3a5f"), spaceAfter=4)
-    sub_style = ParagraphStyle("SS", parent=styles["Normal"],
-                               fontSize=11, textColor=colors.HexColor("#5a5a5a"),
-                               alignment=TA_CENTER, spaceAfter=2)
+    family = cfg.get(
+        "family_name",
+        "Finance Report"
+    )
 
-    story.append(Paragraph(f"{d_fam_name} — Expense Report", title_style))
-    story.append(
-        Paragraph(f"Period: {pdf_start_date.strftime('%d %b %Y')} to {pdf_end_date.strftime('%d %b %Y')}", sub_style))
-    story.append(Paragraph(f"Generated on {datetime.now().strftime('%d %b %Y, %I:%M %p')}", sub_style))
-    story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor("#1e3a5f"), spaceAfter=10))
+    # ════════════════════════════════
+    # HEADER
+    # ════════════════════════════════
+    title = Paragraph(
+        f"""
+        <font size=18>
+        <b>{family} Financial Statement</b>
+        </font>
+        <br/>
+        <font size=10>
+        Period:
+        {start_date.strftime('%d %b %Y')}
+        →
+        {end_date.strftime('%d %b %Y')}
+        </font>
+        """,
+        styles["Title"]
+    )
 
-    total = pdf_df["amount"].sum()
-    daily_avg = total / max((pdf_end_date - pdf_start_date).days + 1, 1)
-    top_cat = pdf_df.groupby("category")["amount"].sum().idxmax() if not pdf_df.empty else "—"
+    elements.append(title)
+    elements.append(Spacer(1, 20))
+
+    # ════════════════════════════════
+    # SUMMARY
+    # ════════════════════════════════
+
+    current_salary = next(
+        (
+            s["amount"]
+            for s in salary_list
+            if s["month"] == today.month
+               and s["year"] == today.year
+        ),
+        0
+    )
+
+    total_expense = filtered["amount"].sum()
+
+    kumar_total_savings = sum(
+        s.get("amount", 0)
+        for s in savings
+        if s.get("source") == "Kumar"
+    )
+
+    total_loans = sum(
+        l.get("remaining", 0)
+        for l in loans
+        if l.get("status") == "Active"
+    )
+
+    next_month_available = (
+            current_salary - total_expense
+            - total_loans - kumar_total_savings
+    )
 
     summary_data = [
-        ["Total Spending", f"{d_currency} {total:,.2f}"],
-        ["Daily Average", f"{d_currency} {daily_avg:,.2f}"],
-        ["Transactions", str(len(pdf_df))],
-        ["Top Category", top_cat],
+        ["Financial Summary", "Amount (INR)"],
+        ["Total Expense", f"{total_expense:,.0f}"],
+        ["Kumar Savings", f"{kumar_total_savings:,.0f}"],
+        ["Active Loan Liability", f"{total_loans:,.0f}"],
+        ["Amount Available For Next Month", f"{next_month_available:,.0f}"]
     ]
-    st_ = Table(summary_data, hAlign="LEFT")
-    st_.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#dce8f5")),
-        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+
+    summary_table = Table(
+        summary_data,
+        colWidths=[250, 220]
+    )
+
+    summary_table.setStyle(TableStyle([
+
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+
+        ("GRID", (0, 0), (-1, -1), 0.6, colors.grey),
+
+        ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke),
+
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 10),
+
         ("FONTSIZE", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("LEFTPADDING", (0, 0), (-1, -1), 8),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#c5d8ec")),
-        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.HexColor("#f0f7ff"), colors.white]),
-    ]))
-    story.append(st_)
-    story.append(Spacer(1, 14))
 
-    story.append(Paragraph("Category Breakdown", styles["Heading2"]))
-    cat_df = pdf_df.groupby("category")["amount"].sum().reset_index().sort_values("amount", ascending=False)
-    cat_data = [["Category", f"Amount ({d_currency})", "% of Total", "Limit", "Status"]]
-    for _, cat_row in cat_df.iterrows():
-        cat_pct = (cat_row["amount"] / total * 100) if total else 0
-        limit = d_limits.get(cat_row["category"], 0)
-        cat_data.append([
-            cat_row["category"],
-            f"{d_currency} {cat_row['amount']:,.2f}",
-            f"{cat_pct:.1f}%",
-            f"{d_currency} {limit:,.2f}" if limit else "—",
-            ("OK" if cat_row["amount"] <= limit else "Over") if limit else "",
+    ]))
+
+    elements.append(summary_table)
+    elements.append(Spacer(1, 25))
+
+    # ════════════════════════════════
+    # CATEGORY BREAKDOWN
+    # ════════════════════════════════
+    category_title = Paragraph(
+        "<b>Category Breakdown</b>",
+        styles["Heading2"]
+    )
+
+    elements.append(category_title)
+    elements.append(Spacer(1, 10))
+
+    category_df = (
+        filtered.groupby("category")["amount"]
+        .sum()
+        .reset_index()
+    )
+
+    category_data = [
+        ["Category", "Amount (INR)"]
+    ]
+
+    for _, row in category_df.iterrows():
+
+        category_data.append([
+            ''.join(
+                c for c in str(row["category"])
+                if ord(c) < 10000
+            ).strip(),
+            f"{row['amount']:,.0f}"
         ])
-    ct_ = Table(cat_data, colWidths=[5.5 * cm, 3 * cm, 2.2 * cm, 3 * cm, 1.8 * cm])
-    ct_.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e3a5f")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#f5f9ff"), colors.white]),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#c5d8ec")),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-    ]))
-    story.append(ct_)
-    story.append(Spacer(1, 14))
 
-    story.append(Paragraph("All Transactions", styles["Heading2"]))
-    txn_data = [["Date", "Category", "Description", "Member", "Payment", f"Amount ({d_currency})"]]
-    for _, txn_row in pdf_df.sort_values("date").iterrows():
-        txn_data.append([
-            str(txn_row["date"]), txn_row["category"],
-            str(txn_row.get("description", ""))[:35],
-            txn_row.get("member", ""), txn_row.get("payment_method", ""),
-            f"{txn_row['amount']:,.2f}",
+    category_table = Table(
+        category_data,
+        colWidths=[250, 220]
+    )
+
+    category_table.setStyle(TableStyle([
+
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2563eb")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+         [colors.whitesmoke, colors.beige]),
+
+        ("FONTSIZE", (0, 0), (-1, -1), 9)
+
+    ]))
+
+    elements.append(category_table)
+    elements.append(Spacer(1, 25))
+
+    # ════════════════════════════════
+    # EXPENSE TRANSACTIONS
+    # ════════════════════════════════
+    tx_title = Paragraph(
+        "<b>Expense Transactions</b>",
+        styles["Heading2"]
+    )
+
+    elements.append(tx_title)
+    elements.append(Spacer(1, 10))
+
+    tx_data = [[
+        "Date",
+        "Category",
+        "Description",
+        "Member",
+        "Payment",
+        "Amount"
+    ]]
+
+    for _, row in filtered.iterrows():
+
+        tx_data.append([
+
+            str(row.get("date", "")),
+
+            ''.join(
+                c for c in str(row.get("category", ""))
+                if ord(c) < 10000
+            ).strip(),
+
+            str(row.get(
+                "description",
+                ""
+            ))[:28],
+
+            str(row.get("member", "")),
+
+            str(row.get(
+                "payment_method",
+                ""
+            )),
+
+            f"{row.get('amount', 0):,.0f}"
         ])
-    txn_data.append(["", "", "", "", "TOTAL", f"{total:,.2f}"])
 
-    tt_ = Table(txn_data,
-                colWidths=[2.2 * cm, 4 * cm, 4.2 * cm, 2.2 * cm, 2.5 * cm, 2.3 * cm],
-                repeatRows=1)
-    tt_.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2c5f8a")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.HexColor("#f5f9ff"), colors.white]),
-        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#dce8f5")),
-        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-        ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#c5d8ec")),
-        ("ALIGN", (-1, 0), (-1, -1), "RIGHT"),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+    # ─────────────────────────────
+    # TOTAL ROW
+    # ─────────────────────────────
+    tx_data.append([
+        "",
+        "",
+        "",
+        "",
+        "TOTAL",
+        f"{filtered['amount'].sum():,.0f}"
+    ])
+
+    tx_table = Table(
+        tx_data,
+        repeatRows=1,
+        colWidths=[70, 80, 150, 70, 70, 75]
+    )
+
+    tx_table.setStyle(TableStyle([
+
+        # ─────────────────────────────
+        # HEADER STYLE
+        # ─────────────────────────────
+        ("BACKGROUND", (0, 0), (-1, 0),
+         colors.HexColor("#111827")),
+
+        ("TEXTCOLOR", (0, 0), (-1, 0),
+         colors.white),
+
+        ("FONTNAME", (0, 0), (-1, 0),
+         "Helvetica-Bold"),
+
+        ("FONTSIZE", (0, 0), (-1, 0), 9),
+
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 10),
+
+        ("TOPPADDING", (0, 0), (-1, 0), 10),
+
+        # ─────────────────────────────
+        # BODY STYLE
+        # ─────────────────────────────
+        ("FONTNAME", (0, 1), (-1, -2),
+         "Helvetica"),
+
+        ("FONTSIZE", (0, 1), (-1, -1), 8),
+
+        # ─────────────────────────────
+        # TOTAL ROW
+        # ─────────────────────────────
+        ("BACKGROUND", (0, -1), (-1, -1),
+         colors.HexColor("#d1d5db")),
+
+        ("FONTNAME", (0, -1), (-1, -1),
+         "Helvetica-Bold"),
+
+        # ─────────────────────────────
+        # GRID
+        # ─────────────────────────────
+        ("GRID", (0, 0), (-1, -1),
+         0.5, colors.grey),
+
+        # ─────────────────────────────
+        # ALIGNMENT
+        # ─────────────────────────────
+        ("ALIGN", (-1, 1), (-1, -1), "RIGHT"),
+
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+
+        # ─────────────────────────────
+        # ROW COLORS
+        # ─────────────────────────────
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2),
+         [colors.whitesmoke, colors.HexColor("#f9fafb")]),
+
     ]))
-    story.append(tt_)
-    doc.build(story)
-    buf.seek(0)
-    return buf
+
+    elements.append(tx_table)
+
+    # ════════════════════════════════
+    # BUILD PDF
+    # ════════════════════════════════
+    doc.build(
+        elements,
+        onFirstPage=add_pdf_footer,
+        onLaterPages=add_pdf_footer
+    )
+
+    buffer.seek(0)
+
+    return buffer
 
 # ─────────────────────────────────────────────────────────────
 # SESSION STATE DEFAULTS
@@ -575,22 +824,16 @@ with st.sidebar:
     )
 
     st.metric(
-        "🏛️ Other Savings",
+        "🏛️ Others Savings",
         f"{currency} {other_savings:,.0f}"
     )
 
     # ─────────────────────────────────────────────
     # AVAILABLE CASH
-    # Salary - Expenses - Loan Liability
-    # Savings NOT deducted because it is your asset
     # ─────────────────────────────────────────────
     available_cash = (
             remaining - kumar_savings - loan_liability
     )
-
-    # ─────────────────────────────────────────────
-    # AVAILABLE CASH CARD
-    # ─────────────────────────────────────────────
     st.metric(
         "💵 Available Cash",
         f"{currency} {available_cash:,.0f}",
@@ -843,7 +1086,7 @@ if st.session_state.page == "🏠 Dashboard":
     )
 
     w2b.metric(
-        "🏛️ Other Savings",
+        "🏛️ Others Savings",
         f"{currency} {other_savings:,.0f}"
     )
 
@@ -923,7 +1166,7 @@ if st.session_state.page == "🏠 Dashboard":
 
         fig2.update_traces(textposition="inside", textinfo="percent+label")
 
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width='stretch')
 
     with col2:
 
@@ -2647,18 +2890,6 @@ elif st.session_state.page == "📊 Charts":
     st.plotly_chart(fig4, width='stretch')
 
     # ---------------------------
-    # 🔷 EXPENSE DISTRIBUTION
-    # ---------------------------
-    st.subheader("📊 Expense Distribution")
-
-    fig5 = px.histogram(
-        df,
-        x="amount",
-        nbins=20
-    )
-    st.plotly_chart(fig5, width='stretch')
-
-    # ---------------------------
     # 🧠 AI INSIGHTS
     # ---------------------------
     st.subheader("🧠 AI Insights Summary")
@@ -3143,12 +3374,21 @@ elif st.session_state.page == "📄 Export PDF":
 
     if st.button("📥 Generate & Download PDF", type="primary", width='stretch'):
         with st.spinner("Generating PDF…"):
-            pdf_buf = generate_pdf(filtered, start_date, end_date, cfg)
+            pdf_buf = generate_pdf(
+                filtered,
+                start_date,
+                end_date,
+                cfg,
+                st.session_state.savings,
+                st.session_state.loans
+            )
+
         st.download_button(
-            label="⬇️ Click here to download PDF",
+            label="⬇️ Download PDF",
             data=pdf_buf,
             file_name=f"expense_report_{start_date}_{end_date}.pdf",
             mime="application/pdf",
             width='stretch',
         )
+
         st.success("✅ PDF ready!")
