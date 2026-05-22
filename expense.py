@@ -14,6 +14,8 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable,
 )
 from reportlab.lib.enums import TA_CENTER
+from streamlit_cookies_manager import EncryptedCookieManager
+
 
 # ─── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -23,22 +25,36 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-DATA_FILE = "expenses.json"
-CONFIG_FILE = "config.json"
-SALARY_FILE = "salary.json"
-LOAN_FILE = "loans.json"
-SAVINGS_FILE = "savings.json"
+# ─── Cookies ─────────────────────────────────────────────────────────────
+cookies = EncryptedCookieManager(
+    prefix="expense_tracker_",
+    password="expense_tracker_secret_key"
+)
+
+if not cookies.ready():
+    st.stop()
+
+DATA_DIR = "user_data"
+os.makedirs(DATA_DIR, exist_ok=True)
+
+USERS_FILE = "users.json"
+DATA_FILE = ""
+CONFIG_FILE = ""
+SALARY_FILE = ""
+LOAN_FILE = ""
+SAVINGS_FILE = ""
 
 # ── Defaults (used only when config has no saved list yet)
+DEFAULT_SAVING_GOAL = 60000
 DEFAULT_CATEGORIES = [
     "🛒 Groceries", "🍽️ Dining Out", "🚗 Transport", "💊 Healthcare",
+    "🍖 Meat", "💐 Flowers", "🥦 Vegetables", "🥛 Milk", "🍎 Fruits",
     "🎓 Education", "🎮 Entertainment", "👗 Clothing", "🏠 Utilities",
     "🛠️ Home Maintenance", "📦 Shopping", "✈️ Travel", "💰 Savings/Investment",
-    "🎁 Gifts", "📱 Subscriptions", "🏋️ Fitness",
-    "📚 Books / Learning", "🔧 Miscellaneous", "🍖 Meat",
-]
-DEFAULT_MEMBERS = ["Shared", "Wife", "Parent 1", "Parent 2", "Child 1", "Child 2"]
-PAYMENT_METHODS = ["Cash", "UPI / Mobile Pay", "Credit Card", "Debit Card", "Net Banking", "Other"]
+    "🎁 Gifts", "📱 Subscriptions", "🏋️ Fitness", "🥤 Chats/Juice",
+    "📚 Books/Learning", "🔧 Miscellaneous"]
+DEFAULT_MEMBERS = ["Shared", "Wife", "Parent", "Child 1", "Child 2", "Friends"]
+PAYMENT_METHODS = ["UPI", "Cash", "Credit Card", "Debit Card", "Net Banking", "Other"]
 CATEGORY_EMOJIS = ["🛒", "🍽️", "🚗", "💊", "🎓", "🎮", "👗", "🏠", "🛠️", "📦", "✈️", "💰", "🐾", "🎁", "📱",
                    "🏋️", "📚", "🔧", "🎯", "🌿", "🏥", "🧴", "🍕", "🍖", "☕", "🎵", "🖥️", "📷", "🧹", "🚿",
                    "💡", "🏦", "🎪", "🧪", "🪴", "🐶", "🍎", "🎂", "🚌", "🎨", "🏡", "🔑", "🪑", "🛋️"]
@@ -49,7 +65,7 @@ DEFAULT_SAVING_TYPES = [
     "Recurring Deposit (RD)",
     "Mutual Fund",
     "Education",
-    "Gold",
+    "Gold/Silver",
     "Other"
 ]
 PAGES = [
@@ -71,13 +87,51 @@ CAT_COLORS = px.colors.qualitative.Pastel + px.colors.qualitative.Bold
 
 # ─── Data helpers ─────────────────────────────────────────────────────────────
 
+def load_users():
+    if not os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "w") as f:
+            json.dump([], f)
+
+    with open(USERS_FILE, "r") as f:
+        return json.load(f)
+
+
+def authenticate(username, password):
+    users = load_users()
+
+    username = username.strip().lower()
+
+    return any(
+        u["username"].strip().lower() == username and
+        u["password"] == password
+        for u in users
+    )
+
+
+def get_user_dir():
+    username = st.session_state.username.lower()
+
+    user_dir = os.path.join(DATA_DIR, username)
+
+    os.makedirs(user_dir, exist_ok=True)
+
+    return user_dir
+
+
+def get_user_file(filename):
+    return os.path.join(
+        get_user_dir(),
+        filename
+    )
+
+
 def load_expenses():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
             data = json.load(f)
         df_load = pd.DataFrame(data)
         if not df_load.empty:
-            df_load["date"] = pd.to_datetime(df_load["date"]).df_load.date
+            df_load["date"] = pd.to_datetime(df_load["date"]).dt.date
             df_load["amount"] = pd.to_numeric(df_load["amount"])
         return df_load
     return pd.DataFrame(
@@ -157,7 +211,8 @@ def generate_pdf(pdf_df, pdf_start_date, pdf_end_date, config):
                                alignment=TA_CENTER, spaceAfter=2)
 
     story.append(Paragraph(f"{d_fam_name} — Expense Report", title_style))
-    story.append(Paragraph(f"Period: {pdf_start_date.strftime('%d %b %Y')} to {pdf_end_date.strftime('%d %b %Y')}", sub_style))
+    story.append(
+        Paragraph(f"Period: {pdf_start_date.strftime('%d %b %Y')} to {pdf_end_date.strftime('%d %b %Y')}", sub_style))
     story.append(Paragraph(f"Generated on {datetime.now().strftime('%d %b %Y, %I:%M %p')}", sub_style))
     story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor("#1e3a5f"), spaceAfter=10))
 
@@ -214,10 +269,10 @@ def generate_pdf(pdf_df, pdf_start_date, pdf_end_date, config):
     story.append(Spacer(1, 14))
 
     story.append(Paragraph("All Transactions", styles["Heading2"]))
-    txn_data = [["Date", "Category", "Description", "Member", "Payment", f"Amount ({currency})"]]
+    txn_data = [["Date", "Category", "Description", "Member", "Payment", f"Amount ({d_currency})"]]
     for _, txn_row in pdf_df.sort_values("date").iterrows():
         txn_data.append([
-            str(txn_row["date"]), row["category"],
+            str(txn_row["date"]), txn_row["category"],
             str(txn_row.get("description", ""))[:35],
             txn_row.get("member", ""), txn_row.get("payment_method", ""),
             f"{txn_row['amount']:,.2f}",
@@ -246,205 +301,963 @@ def generate_pdf(pdf_df, pdf_start_date, pdf_end_date, config):
     buf.seek(0)
     return buf
 
+# ─────────────────────────────────────────────────────────────
+# SESSION STATE DEFAULTS
+# ─────────────────────────────────────────────────────────────
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 
-# ─── Session state bootstrap ──────────────────────────────────────────────────
-if "df" not in st.session_state: st.session_state.df = load_expenses()
-if "config" not in st.session_state: st.session_state.config = load_config()
-if "salary" not in st.session_state:
-    st.session_state.salary = load_json(SALARY_FILE)
-
-if "loans" not in st.session_state:
-    st.session_state.loans = load_json(LOAN_FILE)
-
-if "savings" not in st.session_state:
-    st.session_state.savings = load_json(SAVINGS_FILE)
+if "username" not in st.session_state:
+    st.session_state.username = ""
 
 if "page" not in st.session_state:
     st.session_state.page = PAGES[0]
 
-if st.session_state.page not in PAGES:
-    st.session_state.page = PAGES[0]
+# ─────────────────────────────────────────────────────────────
+# RESTORE LOGIN FROM COOKIE
+# ─────────────────────────────────────────────────────────────
+if not st.session_state.logged_in:
+
+    saved_user = cookies.get("username")
+
+    if saved_user:
+
+        saved_user = saved_user.strip().lower()
+
+        st.session_state.logged_in = True
+        st.session_state.username = saved_user
+
+# ─────────────────────────────────────────────────────────────
+# LOAD USER FILES AFTER LOGIN
+# ─────────────────────────────────────────────────────────────
+if st.session_state.logged_in:
+
+    DATA_FILE = get_user_file("expenses.json")
+    CONFIG_FILE = get_user_file("config.json")
+    SALARY_FILE = get_user_file("salary.json")
+    LOAN_FILE = get_user_file("loans.json")
+    SAVINGS_FILE = get_user_file("savings.json")
+
+    # Load only once
+    if "df" not in st.session_state:
+        st.session_state.df = load_expenses()
+
+    if "config" not in st.session_state:
+        st.session_state.config = load_config()
+
+    if "salary" not in st.session_state:
+        st.session_state.salary = load_json(SALARY_FILE)
+
+    if "loans" not in st.session_state:
+        st.session_state.loans = load_json(LOAN_FILE)
+
+    if "savings" not in st.session_state:
+        st.session_state.savings = load_json(SAVINGS_FILE)
+
+    # Validate page
+    if st.session_state.page not in PAGES:
+        st.session_state.page = PAGES[0]
+
+    cfg = st.session_state.config
+
+    if "saving_goal" not in cfg:
+        cfg["saving_goal"] = DEFAULT_SAVING_GOAL
+
+# ═══════════════════════════════════════
+# LOGIN SCREEN
+# ═══════════════════════════════════════
+if not st.session_state.logged_in:
+
+    st.markdown(
+        """
+        <style>
+        .login-card {
+            padding: 30px;
+            border-radius: 30px;
+            background: linear-gradient(135deg,#111827,#1f2937);
+            color: white;
+            max-width: 420px;
+            margin: auto;
+            margin-top: 100px;
+            box-shadow: 0px 10px 30px rgba(0,0,0,0.3);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        """
+        <div class="login-card">
+            <h1 style="text-align:center;">
+                💰 Family Expense Tracker
+            </h1>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    username = st.text_input(
+        "Username",
+        placeholder="Enter username"
+    )
+
+    password = st.text_input(
+        "Password",
+        type="password",
+        placeholder="Enter password"
+    )
+
+    if st.button(
+            "🔐 Login",
+            width='stretch',
+            type="primary"
+    ):
+
+        if authenticate(username, password):
+
+            username = username.strip().lower()
+
+            st.session_state.logged_in = True
+            st.session_state.username = username
+
+            # Save cookie
+            cookies["username"] = username
+            cookies.save()
+
+            # Reset cached state
+            for key in ["df", "config", "salary", "loans", "savings"]:
+                if key in st.session_state:
+                    del st.session_state[key]
+
+            st.success("✅ Login successful")
+
+            st.rerun()
+
+        else:
+            st.error("❌ Invalid username or password")
+
+    st.stop()
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 💰 Family Expenses")
-    st.caption(f"👨‍👩‍👧‍👦 {st.session_state.config.get('family_name', 'My Family')}")
-    st.divider()
+    st.markdown(
+        """
+        <style>
+        .sidebar-title {
+            padding: 16px;
+            border-radius: 16px;
+            background: linear-gradient(135deg, #111827, #1f2937);
+            color: white;
+            text-align: center;
+            margin-bottom: 15px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
+    st.markdown(
+        f"""
+        <div class="sidebar-title">
+            <h2 style="margin-bottom:0;">💰 {st.session_state.config.get('family_name', 'My Family')} Expenses</h2>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # ─────────────────────────────────────────────
+    # NAVIGATION
+    # ─────────────────────────────────────────────
     page = st.radio(
-        "Navigate",
+        "📌 Navigate",
         PAGES,
         index=PAGES.index(st.session_state.page),
-        key="page_radio"   # ✅ IMPORTANT FIX
+        key="page_radio"
     )
 
     st.session_state.page = page
+
     st.divider()
+
     currency = st.session_state.config.get("currency", "₹")
     df_side = st.session_state.df
     today = date.today()
 
-    # ── Monthly Salary ──
-    salary_list = st.session_state.salary if "salary" in st.session_state else []
+    # ─────────────────────────────────────────────
+    # MONTHLY SALARY
+    # ─────────────────────────────────────────────
+    salary_list = (
+        st.session_state.salary
+        if "salary" in st.session_state
+        else []
+    )
 
     current_salary = next(
-        (s["amount"] for s in salary_list
-         if s["month"] == today.month and s["year"] == today.year),
+        (
+            s["amount"]
+            for s in salary_list
+            if s["month"] == today.month
+               and s["year"] == today.year
+        ),
         0
     )
 
-    st.metric("This Month Salary", f"{currency} {current_salary:,.0f}")
+    st.metric(
+        "💼 This Month Salary",
+        f"{currency} {current_salary:,.0f}"
+    )
 
-    # ── Monthly Expense ──
+    # ─────────────────────────────────────────────
+    # MONTHLY EXPENSE
+    # ─────────────────────────────────────────────
     month_total = 0
+
     if not df_side.empty:
         ms = date(today.year, today.month, 1)
+
         month_total = df_side[
-            (df_side["date"] >= ms) & (df_side["date"] <= today)
-        ]["amount"].sum()
+            (df_side["date"] >= ms)
+            & (df_side["date"] <= today)
+            ]["amount"].sum()
 
-    st.metric("This Month Expense", f"{currency} {month_total:,.0f}")
+    st.metric(
+        "💸 This Month Expense",
+        f"{currency} {month_total:,.0f}"
+    )
 
-    # ── Remaining Balance ──
+    # ─────────────────────────────────────────────
+    # REMAINING BALANCE
+    # ─────────────────────────────────────────────
     remaining = current_salary - month_total
 
     st.metric(
-        "Remaining Balance",
-        f"{currency} {remaining:,.0f}",
-        delta=f"{remaining:,.0f}",
-        delta_color="normal")
+        "💰 Total Balance",
+        f"{currency} {remaining:,.0f}"
+    )
+
+    # ─────────────────────────────────────────────
+    # ACTIVE LOAN LIABILITY
+    # ─────────────────────────────────────────────
+    active_loans = [
+        l for l in st.session_state.loans
+        if l.get("status") == "Active"
+    ]
+
+    loan_liability = sum(
+        l.get("remaining", 0)
+        for l in active_loans
+    )
+
+    # ─────────────────────────────────────────────
+    # TOTAL SAVINGS (ASSET)
+    # ─────────────────────────────────────────────
+    total_savings = sum(
+        s.get("amount", 0)
+        for s in st.session_state.savings
+    )
+
+    # ─────────────────────────────────────────────
+    # SAVINGS BREAKDOWN (NEW)
+    # ─────────────────────────────────────────────
+
+    kumar_savings = sum(
+        s.get("amount", 0)
+        for s in st.session_state.savings
+        if s.get("source") == "Kumar"
+    )
+
+    other_savings = total_savings - kumar_savings
+
+    st.metric(
+        "🏦 Kumar Savings",
+        f"{currency} {kumar_savings:,.0f}"
+    )
+
+    st.metric(
+        "🏛️ Other Savings",
+        f"{currency} {other_savings:,.0f}"
+    )
+
+    # ─────────────────────────────────────────────
+    # AVAILABLE CASH
+    # Salary - Expenses - Loan Liability
+    # Savings NOT deducted because it is your asset
+    # ─────────────────────────────────────────────
+    available_cash = (
+            remaining - kumar_savings - loan_liability
+    )
+
+    # ─────────────────────────────────────────────
+    # AVAILABLE CASH CARD
+    # ─────────────────────────────────────────────
+    st.metric(
+        "💵 Available Cash",
+        f"{currency} {available_cash:,.0f}",
+        delta=f"Loan Liability: {currency} {loan_liability:,.0f}",
+        delta_color="inverse"
+    )
+
+    # ─────────────────────────────────────────────
+    # STATUS
+    # ─────────────────────────────────────────────
+    if available_cash < 0:
+        st.error(
+            f"⚠️ Cash Flow Negative "
+            f"({currency} {abs(available_cash):,.0f})"
+        )
+
+    else:
+
+        st.success(
+            f"✅ Safe Available Cash: "
+            f"{currency} {available_cash:,.0f}"
+        )
+
+    st.divider()
+
+    st.caption(
+        f"👤 Logged in as: "
+        f"{st.session_state.username}"
+    )
+    if st.button(
+            "🚪 Logout",
+            width='stretch',
+            type="secondary"
+    ):
+        cookies["username"] = ""
+        cookies.save()
+
+        # Clear session
+        for key in [
+            "logged_in",
+            "username",
+            "df",
+            "config",
+            "salary",
+            "loans",
+            "savings"
+        ]:
+            if key in st.session_state:
+                del st.session_state[key]
+
+        st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 🏠 DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 if st.session_state.page == "🏠 Dashboard":
+
     cfg = st.session_state.config
     currency = cfg.get("currency", "₹")
-    df = st.session_state.df
-    today = date.today()
+    df = st.session_state.df.copy()
 
-    st.title("🏠 Dashboard")
-    st.caption(f"Today is {today.strftime('%A, %d %B %Y')}")
+    st.title("🏠 Smart Financial Dashboard")
 
-    today_total = df[df["date"] == today]["amount"].sum() if not df.empty else 0
-    week_start = today - timedelta(days=today.weekday())
-    week_total = df[(df["date"] >= week_start) & (df["date"] <= today)]["amount"].sum() if not df.empty else 0
-    ms = date(today.year, today.month, 1)
-    month_df = df[(df["date"] >= ms) & (df["date"] <= today)] if not df.empty else pd.DataFrame()
-    month_total = month_df["amount"].sum() if not month_df.empty else 0
-    lme = ms - timedelta(days=1)
-    lms = date(lme.year, lme.month, 1)
-    last_month = df[(df["date"] >= lms) & (df["date"] <= lme)]["amount"].sum() if not df.empty else 0
+    # ════════════════════════════════════════════
+    # FILTER BAR
+    # ════════════════════════════════════════════
+    with st.container(border=True):
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Today", f"{currency} {today_total:,.0f}")
-    c2.metric("This Week", f"{currency} {week_total:,.0f}")
-    c3.metric("This Month", f"{currency} {month_total:,.0f}",
-              delta=f"{month_total - last_month:+,.0f} vs last month", delta_color="inverse")
-    c4.metric("Transactions", len(month_df) if not month_df.empty else 0)
+        st.subheader("📅 Analytics Filter")
 
-    st.divider()
-    if df.empty:
-        st.info("No expenses yet. Head to **➕ Add Expense** to get started!")
+        fc1, fc2, fc3 = st.columns([1, 1, 1])
+
+        today = date.today()
+
+        with fc1:
+
+            filter_type = st.selectbox(
+                "View",
+                [
+                    "Current Month",
+                    "Last 30 Days",
+                    "Custom Range"
+                ]
+            )
+
+        if filter_type == "Current Month":
+
+            start_date = date(
+                today.year,
+                today.month,
+                1
+            )
+
+            end_date = today
+
+        elif filter_type == "Last 30 Days":
+
+            start_date = today - timedelta(days=30)
+            end_date = today
+
+        else:
+
+            with fc2:
+                start_date = st.date_input(
+                    "Start Date",
+                    value=today.replace(day=1),
+                    max_value=today
+                )
+
+            with fc3:
+                end_date = st.date_input(
+                    "End Date",
+                    value=today,
+                    max_value=today
+                )
+
+        st.caption(
+            f"📌 "
+            f"{start_date.strftime('%d %b %Y')} "
+            f"→ "
+            f"{end_date.strftime('%d %b %Y')}"
+        )
+
+    # ════════════════════════════════════════════
+    # FILTER DATA
+    # ════════════════════════════════════════════
+    if not df.empty:
+
+        filtered_df = df[
+            (df["date"] >= start_date) &
+            (df["date"] <= end_date)
+            ].copy()
+
+    else:
+        filtered_df = pd.DataFrame()
+
+    if filtered_df.empty:
+        st.info("No expenses found.")
         st.stop()
 
-    limits = cfg.get("limits", {})
-    if limits and not month_df.empty:
-        over = [(c, month_df[month_df["category"] == c]["amount"].sum(), l)
-                for c, l in limits.items()
-                if month_df[month_df["category"] == c]["amount"].sum() > l]
-        if over:
-            with st.expander("⚠️ Budget Alerts", expanded=True):
-                for c_, sp, lim in over:
-                    st.error(
-                        f"**{c_}** — {currency} {sp:,.0f} spent of {currency} {lim:,.0f} (+{currency} {sp - lim:,.0f})")
+    # ════════════════════════════════════════════
+    # CORE CALCULATIONS
+    # ════════════════════════════════════════════
+    total_spent = filtered_df["amount"].sum()
 
-    ca, cb = st.columns([1.2, 1])
-    with ca:
-        st.subheader("📈 Monthly Spending Trend")
-        df2 = df.copy()
-        df2["month"] = pd.to_datetime(df2["date"].astype(str)).dt.to_period("M")
-        monthly = df2.groupby("month")["amount"].sum().reset_index()
-        monthly["month_str"] = monthly["month"].astype(str)
-        fig = px.bar(monthly.tail(7), x="month_str", y="amount",
-                     color="amount", color_continuous_scale="Blues", text_auto=".2s",
-                     labels={"month_str": "Month", "amount": f"Amount ({currency})"})
-        fig.update_layout(showlegend=False, coloraxis_showscale=False,
-                          margin=dict(t=10, b=10), height=280)
-        st.plotly_chart(fig, width='stretch')
+    highest_spend = filtered_df["amount"].max()
 
-    with cb:
-        st.subheader("🍩 This Month by Category")
-        if not month_df.empty:
-            cs = month_df.groupby("category")["amount"].sum().reset_index()
-            fig2 = px.pie(cs, names="category", values="amount",
-                          hole=0.45, color_discrete_sequence=CAT_COLORS)
-            fig2.update_traces(textposition="inside", textinfo="percent+label")
-            fig2.update_layout(showlegend=False, margin=dict(t=10, b=10), height=280)
-            st.plotly_chart(fig2, width='stretch')
-        else:
-            st.info("No data for current month.")
+    avg_daily = (
+            total_spent /
+            max((end_date - start_date).days + 1, 1)
+    )
 
-    if limits and not month_df.empty:
-        st.subheader("🎯 Budget Progress — This Month")
-        bcols = st.columns(3)
-        for i, (cat, lim) in enumerate(limits.items()):
-            spent = month_df[month_df["category"] == cat]["amount"].sum()
-            pct = min(spent / lim, 1.0) if lim else 0
-            icon = "🔴" if pct >= 1 else ("🟡" if pct >= 0.8 else "🟢")
-            with bcols[i % 3]:
-                st.markdown(f"**{cat}** {icon}")
-                st.progress(pct)
-                st.caption(f"{currency} {spent:,.0f} / {currency} {lim:,.0f}")
+    txns = len(filtered_df)
 
-    st.subheader("🕐 Recent Transactions")
-    recent = df.sort_values("date", ascending=False).head(10)[
-        ["date", "category", "description", "member", "amount"]].copy()
-    recent["amount"] = recent["amount"].apply(lambda x: f"{currency} {x:,.2f}")
-    st.dataframe(recent, width='stretch', hide_index=True)
-
-    today = date.today()
-
-    salary = next(
-        (s["amount"] for s in st.session_state.salary
-         if s["month"] == today.month and s["year"] == today.year),
+    current_salary = next(
+        (
+            s["amount"]
+            for s in st.session_state.salary
+            if s["month"] == end_date.month
+               and s["year"] == end_date.year
+        ),
         0
     )
-    expenses_total = df["amount"].sum() if not df.empty else 0
-    loan_taken = sum([l["amount"] for l in st.session_state.loans])
-    loan_remaining = sum([l["remaining"] for l in st.session_state.loans])
-    savings_total = sum([s["amount"] for s in st.session_state.savings])
 
-    balance = salary - expenses_total - savings_total
-    liability = sum([l["remaining"] for l in st.session_state.loans])
-    net_worth = balance - liability
-    next_month_available = salary - loan_remaining
+    savings_total = sum(
+        s["amount"]
+        for s in st.session_state.savings
+    )
+
+    kumar_savings = sum(
+        s["amount"]
+        for s in st.session_state.savings
+        if s.get("source") == "Kumar"
+    )
+
+    other_savings = savings_total - kumar_savings
+
+    active_loans = [
+        l for l in st.session_state.loans
+        if l.get("status") == "Active"
+    ]
+
+    loan_due = sum(
+        l["remaining"]
+        for l in active_loans
+    )
+
+    available_cash = (
+            current_salary
+            - total_spent
+            - loan_due
+    )
+
+    expense_ratio = (
+        (total_spent / current_salary) * 100
+        if current_salary else 0
+    )
+
+    savings_ratio = (
+        (savings_total / current_salary) * 100
+        if current_salary else 0
+    )
+
+    # ════════════════════════════════════════════
+    # HERO METRICS
+    # ════════════════════════════════════════════
+    st.subheader("📌 Financial Snapshot")
+
+    h1, h2, h3, h4 = st.columns(4)
+
+    h1.metric(
+        "💸 Total Spent",
+        f"{currency} {total_spent:,.0f}"
+    )
+
+    h2.metric(
+        "🧾 Transactions",
+        txns
+    )
+
+    h3.metric(
+        "📅 Daily Average",
+        f"{currency} {avg_daily:,.0f}"
+    )
+
+    h4.metric(
+        "🔥 Highest Expense",
+        f"{currency} {highest_spend:,.0f}"
+    )
+
+    # ════════════════════════════════════════════
+    # WEALTH CARDS
+    # ════════════════════════════════════════════
+    st.divider()
+
+    st.subheader("💰 Wealth Overview")
+
+    w1, w2, w3, w4 = st.columns(4)
+
+    w1.metric(
+        "💼 Salary",
+        f"{currency} {current_salary:,.0f}"
+    )
+
+    w2a, w2b = st.columns(2)
+
+    w2a.metric(
+        "🏦 Kumar Savings",
+        f"{currency} {kumar_savings:,.0f}"
+    )
+
+    w2b.metric(
+        "🏛️ Other Savings",
+        f"{currency} {other_savings:,.0f}"
+    )
+
+    w3.metric(
+        "💳 Loan Due",
+        f"{currency} {loan_due:,.0f}"
+    )
+
+    w4.metric(
+        "💵 Available Cash",
+        f"{currency} {available_cash:,.0f}"
+    )
+
+    savings_df = pd.DataFrame(st.session_state.savings)
+
+    if not savings_df.empty:
+        savings_df["amount"] = pd.to_numeric(savings_df["amount"], errors="coerce")
+    else:
+        savings_df = pd.DataFrame(columns=["amount", "source"])
 
     st.divider()
-    st.subheader("💰 Financial Summary")
+    st.subheader("🔥 Savings Analytics Panel")
 
-    c1, c2, c3, c4 = st.columns(4)
+    source_summary = (
+        savings_df.groupby("source")["amount"]
+        .sum()
+        .sort_values(ascending=False)
+        .reset_index()
+    )
 
-    c1.metric("Salary", f"₹ {salary}")
-    c2.metric("Expenses", f"₹ {expenses_total}")
-    c3.metric("Savings", f"₹ {savings_total}")
-    c4.metric("Balance", f"₹ {balance}")
+    total_savings = source_summary["amount"].sum()
 
-    st.metric("💳 Total Loan Liability", f"₹ {liability}")
-    st.metric("📊 Net Position", f"₹ {net_worth}")
+    source_summary["contribution_%"] = (
+            source_summary["amount"] / total_savings * 100
+    )
 
-    if balance < 0:
-        st.error(f"⚠️ You are over budget by ₹ {abs(balance):,.0f}")
+    top_source = source_summary.iloc[0]
 
-        st.info("💡 Suggestion: Take a loan or reduce expenses.")
+    insights = []
 
-        if st.button("➡️ Go to Loans Page"):
-            st.session_state.page = "🤝 Loans"
-            st.session_state.page_radio = "🤝 Loans"  # sync radio
-            st.rerun()
+    insights.append(
+        f"🏆 **{top_source['source']}** contributes the highest savings at "
+        f"{top_source['contribution_%']:.1f}%"
+    )
 
-    st.subheader("📅 Next Month Projection")
-    st.info(f"Available after clearing loans: ₹ {next_month_available}")
+    for _, row in source_summary.iterrows():
+        insights.append(
+            f"👤 {row['source']} contributes {row['contribution_%']:.1f}% "
+            f"({currency} {row['amount']:,.0f})"
+        )
+
+    # Dominance rule
+    if top_source["contribution_%"] >= 70:
+        insights.append(
+            f"🔥 **{top_source['source']} dominates savings with "
+            f"{top_source['contribution_%']:.1f}% contribution**"
+        )
+    elif top_source["contribution_%"] >= 50:
+        insights.append(
+            f"⚖️ Savings are moderately concentrated in {top_source['source']}."
+        )
+    else:
+        insights.append(
+            "📊 Savings are well distributed across members."
+        )
+
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+
+        fig2 = px.pie(
+            source_summary,
+            names="source",
+            values="amount",
+            hole=0.5
+        )
+
+        fig2.update_traces(textposition="inside", textinfo="percent+label")
+
+        st.plotly_chart(fig2, use_container_width=True)
+
+    with col2:
+
+        st.subheader("🧠 Insights")
+
+        for i, text in enumerate(insights):
+            st.write(f"{i + 1}. {text}")
+
+    # ════════════════════════════════════════════
+    # FINANCIAL SCORE + PERSONALITY
+    # ════════════════════════════════════════════
+    st.divider()
+
+    c1, c2 = st.columns([1, 1])
+
+    score = 100
+
+    if expense_ratio > 80:
+        score -= 25
+
+    if loan_due > current_salary:
+        score -= 30
+
+    if savings_ratio > 30:
+        score += 10
+
+    score = max(0, min(score, 100))
+
+    with c1:
+
+        st.subheader("🏅 Financial Score")
+
+        st.progress(score / 100)
+
+        st.metric(
+            "Overall Score",
+            f"{score}/100"
+        )
+
+    with c2:
+
+        st.subheader("🧠 Spending Personality")
+
+        if expense_ratio < 40:
+            personality = "Excellent Saver 🟢"
+
+        elif expense_ratio < 70:
+            personality = "Balanced Spender 🟡"
+
+        else:
+            personality = "Aggressive Spender 🔴"
+
+        st.success(
+            f"""
+            ### {personality}
+
+            - Expense Usage: {expense_ratio:.1f}%
+            - Savings Rate: {savings_ratio:.1f}%
+            """
+        )
+
+    # ════════════════════════════════════════════
+    # SAVINGS INSIGHT + CASH RUNWAY
+    # ════════════════════════════════════════════
+    st.divider()
+
+    i1, i2 = st.columns(2)
+
+    top_category = (
+        filtered_df.groupby("category")["amount"]
+        .sum()
+        .sort_values(ascending=False)
+    )
+
+    highest_cat = top_category.index[0]
+    highest_amt = top_category.iloc[0]
+
+    potential_save = highest_amt * 0.20
+
+    with i1:
+
+        st.info(
+            f"""
+            ### 💡 Savings Insight
+
+            Highest Spending:
+            **{highest_cat}**
+
+            Current Spend:
+            {currency} {highest_amt:,.0f}
+
+            Possible Savings:
+            {currency} {potential_save:,.0f}
+            """
+        )
+
+    burn_rate = avg_daily
+
+    days_left = (
+        available_cash / burn_rate
+        if burn_rate else 0
+    )
+
+    with i2:
+
+        st.warning(
+            f"""
+            ### 🔥 Cash Runway
+
+            Your current cash can sustain for: 
+            ## {days_left:.0f} Days
+            Based on average daily spending.
+            """
+        )
+
+    # ════════════════════════════════════════════
+    # SAVINGS GOAL
+    # ════════════════════════════════════════════
+    st.divider()
+
+    goal = cfg.get("saving_goal", 60000)
+
+    progress = (
+        (savings_total / goal) * 100
+        if goal else 0
+    )
+
+    st.subheader("🎯 Savings Goal")
+
+    st.progress(min(progress / 100, 1.0))
+
+    sg1, sg2, sg3 = st.columns(3)
+
+    sg1.metric(
+        "Goal Amount",
+        f"{currency} {goal:,.0f}"
+    )
+
+    sg2.metric(
+        "Saved",
+        f"{currency} {savings_total:,.0f}"
+    )
+
+    sg3.metric(
+        "Completion",
+        f"{progress:.1f}%"
+    )
+
+    remaining_goal = goal - savings_total
+
+    if remaining_goal > 0:
+        st.info(
+            f"💰 You need {currency} {remaining_goal:,.0f} more to reach your goal."
+        )
+    else:
+        st.success("🎉 Savings goal achieved!")
+
+    # ════════════════════════════════════════════
+    # MONTHLY COMPARISON
+    # ════════════════════════════════════════════
+    st.divider()
+
+    previous_month = today.month - 1 or 12
+
+    previous_year = (
+        today.year
+        if today.month != 1
+        else today.year - 1
+    )
+
+    prev_df = df[
+        (
+                pd.to_datetime(df["date"]).dt.month
+                == previous_month
+        ) &
+        (
+                pd.to_datetime(df["date"]).dt.year
+                == previous_year
+        )
+        ]
+
+    prev_total = prev_df["amount"].sum()
+
+    change = total_spent - prev_total
+
+    change_pct = (
+        (change / prev_total) * 100
+        if prev_total else 0
+    )
+
+    st.subheader("📊 Monthly Comparison")
+
+    mc1, mc2 = st.columns(2)
+
+    mc1.metric(
+        "Current Spending",
+        f"{currency} {total_spent:,.0f}"
+    )
+
+    mc2.metric(
+        "Monthly Change",
+        f"{change_pct:.1f}%",
+        delta=f"{currency} {change:,.0f}"
+    )
+
+    # ════════════════════════════════════════════
+    # UNUSUAL EXPENSES
+    # ════════════════════════════════════════════
+    threshold = (
+            filtered_df["amount"].mean() * 2
+    )
+
+    unusual = filtered_df[
+        filtered_df["amount"] > threshold
+        ]
+
+    if not unusual.empty:
+        st.divider()
+
+        st.subheader("🚨 Unusual Expenses")
+
+        st.dataframe(
+            unusual[
+                [
+                    "date",
+                    "category",
+                    "amount"
+                ]
+            ],
+            width='stretch',
+            hide_index=True
+        )
+
+    # ════════════════════════════════════════════
+    # CHARTS
+    # ════════════════════════════════════════════
+    st.divider()
+
+    vc1, vc2 = st.columns([1.4, 1])
+
+    with vc1:
+
+        st.subheader("📈 Spending Trend")
+
+        chart_df = filtered_df.copy()
+
+        chart_df["day"] = pd.to_datetime(
+            chart_df["date"]
+        ).dt.strftime("%d-%b")
+
+        daily = (
+            chart_df.groupby("day")["amount"]
+            .sum()
+            .reset_index()
+        )
+
+        fig = px.area(
+            daily,
+            x="day",
+            y="amount",
+            markers=True,
+            line_shape="spline"
+        )
+
+        fig.update_traces(
+            mode="lines+markers",
+            fill="tozeroy"
+        )
+
+        fig.update_layout(
+            template="plotly_dark",
+            height=380,
+            margin=dict(t=10, b=10),
+            xaxis_title=None,
+            yaxis_title=None
+        )
+
+        st.plotly_chart(
+            fig,
+            width='stretch'
+        )
+
+    with vc2:
+
+        st.subheader("🍩 Expense Split")
+
+        cat = (
+            filtered_df.groupby("category")["amount"]
+            .sum()
+            .reset_index()
+        )
+
+        fig2 = px.pie(
+            cat,
+            names="category",
+            values="amount",
+            hole=0.60,
+            color_discrete_sequence=CAT_COLORS
+        )
+
+        fig2.update_traces(
+            textposition="inside",
+            textinfo="percent"
+        )
+
+        fig2.update_layout(
+            height=380,
+            margin=dict(t=10, b=10)
+        )
+
+        st.plotly_chart(
+            fig2,
+            width='stretch'
+        )
+
+    # ════════════════════════════════════════════
+    # WARNINGS
+    # ════════════════════════════════════════════
+    st.divider()
+
+    if expense_ratio >= 80:
+        st.warning(
+            "⚠️ Expenses are above 80% of salary."
+        )
+
+    if loan_due > current_salary > 0:
+        st.warning(
+            "⚠️ Loan dues exceed salary."
+        )
+
+    if available_cash < 0:
+        st.error(
+            "🚨 Negative available balance detected."
+        )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ➕ ADD EXPENSE
@@ -460,17 +1273,37 @@ elif st.session_state.page == "➕ Add Expense":
     with st.form("add_expense_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
         with c1:
-            exp_date = st.date_input("Date", value=date.today())
+            exp_date = st.date_input(
+                "Date",
+                value=date.today(),
+                max_value=date.today()
+            )
             category = st.selectbox("Category", CATS)
             description = st.text_input("Description", placeholder="e.g. Weekly groceries")
         with c2:
-            amount = st.number_input(f"Amount ({currency})", min_value=0.0, step=10.0, format="%.0f")
+            amount = st.number_input(
+                f"Amount ({currency})",
+                min_value=0.0,
+                step=10.0,
+                placeholder="Enter amount",
+                format="%.0f"
+            )
             member = st.selectbox("Family Member", MEMS)
             payment = st.selectbox("Payment Method", PAYMENT_METHODS)
         notes = st.text_area("Notes (optional)", height=80)
-        submitted = st.form_submit_button("💾 Save Expense", width='stretch', type="primary")
+        submitted = st.form_submit_button(
+            "💾 Save Expense",
+            width='stretch',
+            type="primary"
+        )
 
         if submitted:
+            if amount is None or amount <= 0:
+                st.warning(
+                    "⚠️ Please enter a valid amount greater than 0."
+                )
+                st.stop()
+
             df = st.session_state.df
             nr = {"id": next_id(df), "date": exp_date, "category": category,
                   "description": description, "amount": amount,
@@ -524,8 +1357,10 @@ elif st.session_state.page == "💼 Salary":
     with c1:
         month = st.selectbox(
             "Select Month",
-            list(range(1, 13)),
-            format_func=lambda x: datetime(2000, x, 1).strftime("%B")
+            ["Select Month"] + list(range(1, 13)),
+            index=0,
+            format_func=lambda x: x if isinstance(x, str)
+            else datetime(2000, x, 1).strftime("%B")
         )
 
     with c2:
@@ -533,199 +1368,983 @@ elif st.session_state.page == "💼 Salary":
         years = list(range(2022, current_year + 1))
 
         year = st.selectbox(
-            "Year",
-            years,
-            index=years.index(current_year)
+            "Select Year",
+            ["Select Year"] + years,
+            index=0
         )
 
-    amount = st.number_input("Salary Amount", min_value=0.0, format="%.0f")
+    amount = st.number_input(
+        "Salary Amount",
+        min_value=0.0,
+        format="%.0f"
+    )
 
     # 🔍 Check duplicate
-    exists = any(s["month"] == month and s["year"] == year for s in salaries)
+    exists = any(
+        s["month"] == month and
+        s["year"] == year
+        for s in salaries
+    )
 
     if exists:
-        st.warning("⚠️ Salary already exists for this month & year")
+        st.warning(
+            "⚠️ Salary already exists "
+            "for this month & year"
+        )
 
-    if st.button("Save Salary", disabled=exists):
+    if st.button(
+            "Save Salary",
+            disabled=(exists or amount <= 0)
+    ):
         salaries.append({
             "month": month,
             "year": year,
             "amount": amount
         })
 
-        save_json(SALARY_FILE, salaries)
+        save_json(
+            SALARY_FILE,
+            salaries
+        )
+
         st.session_state.salary = salaries
 
         st.success("✅ Salary saved!")
 
-    # 📊 Display table
+    # 📊 DISPLAY SALARY HISTORY
     if salaries:
+
+        st.divider()
+        st.subheader("📊 Salary History")
+
         df_sal = pd.DataFrame(salaries)
 
-        df_sal["month"] = df_sal["month"].apply(lambda x: datetime(2000, x, 1).strftime("%B"))
+        # Create Month-Year column
+        df_sal["salary_period"] = df_sal.apply(
+            lambda row: (
+                f"{datetime(2000, int(row['month']), 1).strftime('%B')} "
+                f"{int(row['year'])}"
+            ),
+            axis=1
+        )
 
-        st.subheader("📊 Salary History")
+        # Sort latest first
+        df_sal = df_sal.sort_values(
+            ["year", "month"],
+            ascending=False
+        ).reset_index(drop=True)
+
+        # Serial number
+        df_sal.insert(0, "Sl.No", range(1, len(df_sal) + 1))
+
+        # Display
         st.dataframe(
-            df_sal[["month", "year", "amount"]]
-            .sort_values(["year", "month"], ascending=False),
+            df_sal[
+                ["Sl.No", "salary_period", "amount"]
+            ].rename(
+                columns={
+                    "salary_period": "Salary Month",
+                    "amount": "Salary Amount"
+                }
+            ),
             width='stretch',
             hide_index=True
         )
+
+        # ─────────────────────────────────────────────
+        # EDIT / DELETE SALARY
+        # ─────────────────────────────────────────────
+        st.divider()
+        st.subheader("✏️ Edit Salary")
+
+        # Create display list
+        salary_options = [
+            f"{datetime(2000, int(s['month']), 1).strftime('%B')} {int(s['year'])}"
+            for s in salaries
+        ]
+
+        selected_salary_label = st.selectbox(
+            "Select Salary Month",
+            options=["Select"] + salary_options
+        )
+
+        # Show edit section only after selection
+        if selected_salary_label != "Select":
+
+            selected_salary = salary_options.index(
+                selected_salary_label
+            )
+
+            salary_row = salaries[selected_salary]
+
+            e1, e2, e3 = st.columns(3)
+
+            with e1:
+                edit_month = st.selectbox(
+                    "Month",
+                    options=list(range(1, 13)),
+                    index=int(salary_row["month"]) - 1,
+                    format_func=lambda x: datetime(2000, x, 1).strftime("%B"),
+                    key="edit_salary_month"
+                )
+
+            with e2:
+                edit_year = st.selectbox(
+                    "Year",
+                    options=years,
+                    index=years.index(int(salary_row["year"])),
+                    key="edit_salary_year"
+                )
+
+            with e3:
+                edit_amount = st.number_input(
+                    "Amount",
+                    min_value=0.0,
+                    value=float(salary_row["amount"]),
+                    format="%.0f",
+                    key="edit_salary_amount"
+                )
+
+            c1, c2 = st.columns(2)
+
+            # UPDATE
+            with c1:
+
+                if st.button(
+                        "💾 Update Salary",
+                        width='stretch'
+                ):
+
+                    duplicate = any(
+                        s["month"] == edit_month and
+                        s["year"] == edit_year and
+                        i != selected_salary
+                        for i, s in enumerate(salaries)
+                    )
+
+                    if duplicate:
+
+                        st.error(
+                            "Salary already exists "
+                            "for selected month & year"
+                        )
+
+                    else:
+
+                        salaries[selected_salary] = {
+                            "month": edit_month,
+                            "year": edit_year,
+                            "amount": edit_amount
+                        }
+
+                        save_json(
+                            SALARY_FILE,
+                            salaries
+                        )
+
+                        st.session_state.salary = salaries
+
+                        st.success("✅ Salary updated!")
+                        st.rerun()
+
+            # DELETE
+            with c2:
+
+                if st.button(
+                        "🗑️ Delete Salary",
+                        width='stretch',
+                        type="secondary"
+                ):
+                    salaries.pop(selected_salary)
+
+                    save_json(
+                        SALARY_FILE,
+                        salaries
+                    )
+
+                    st.session_state.salary = salaries
+
+                    st.success("✅ Salary deleted!")
+                    st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 🤝 Loans
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.page == "🤝 Loans":
+
     st.title("🤝 Borrow Loan")
+    if "loan_added" not in st.session_state:
+        st.session_state.loan_added = False
 
     members = get_members() + ["Friend"]
 
-    loan_name = st.text_input("Loan Name (e.g. Bike Loan)")
-    lender = st.selectbox("Borrow From", members)
-    amount = st.number_input("Loan Amount", min_value=0.0, format="%.0f")
-    note = st.text_input("Reason")
+    # ─────────────────────────────────────────────
+    # ➕ ADD NEW LOAN
+    # ─────────────────────────────────────────────
+    st.subheader("➕ Add New Loan")
 
-    if st.button("Take Loan"):
+    c1, c2 = st.columns(2)
+
+    with c1:
+        loan_name = st.text_input(
+            "Loan Name",
+            placeholder="e.g. Bike Loan"
+        )
+
+        lender = st.selectbox(
+            "Borrow From",
+            members,
+            key="loan_lender"
+        )
+
+        note = st.text_input("Reason")
+
+    with c2:
+        amount = st.number_input(
+            "Loan Amount",
+            min_value=0.0,
+            format="%.0f"
+        )
+
+        loan_date = st.date_input(
+            "Borrowed Date",
+            value=date.today(),
+            max_value=date.today()
+        )
+
+    # ✅ Duplicate validation
+    duplicate_loan = False
+
+    if loan_name.strip():
+        duplicate_loan = any(
+            l["loan_name"].strip().lower() == loan_name.strip().lower()
+            and l.get("status") == "Active"
+            for l in st.session_state.loans
+        )
+
+    # Show warning only before clicking button
+    if duplicate_loan and not st.session_state.get("loan_added", False):
+        st.warning("⚠️ Loan name already exists")
+
+    if st.button(
+            "Take Loan",
+            disabled=duplicate_loan or not loan_name.strip() or amount <= 0,
+            type="primary",
+            width='stretch'
+    ):
         loan = {
-            "loan_name": loan_name,
+            "loan_name": loan_name.strip(),
             "lender": lender,
             "amount": amount,
             "remaining": amount,
-            "date": str(date.today()),
+            "borrowed_date": str(loan_date),
             "note": note,
             "status": "Active",
             "payments": []
         }
+
         st.session_state.loans.append(loan)
+
         save_json(LOAN_FILE, st.session_state.loans)
-        st.success("Loan added!")
+        st.session_state.loan_added = True
 
-    st.subheader("Active Loans")
+        st.success("✅ Loan added!")
+        st.rerun()
 
-    if st.session_state.loans:
-        active_loans = [l for l in st.session_state.loans if l.get("status") == "Active"]
+    st.divider()
 
-        if active_loans:
-            df_loans = pd.DataFrame(active_loans)
+    # ─────────────────────────────────────────────────────────
+    # ACTIVE LOANS
+    # ─────────────────────────────────────────────────────────
+    st.subheader("📋 Active Loans")
 
-            st.dataframe(
-                df_loans[["loan_name", "lender", "amount", "remaining", "date", "note"]],
-                width='stretch'
+    active_loans = [
+        l for l in st.session_state.loans
+        if l.get("status") == "Active"
+    ]
+
+    if active_loans:
+
+        df_loans = pd.DataFrame(active_loans)
+
+        df_loans.insert(
+            0,
+            "Sl.No",
+            range(1, len(df_loans) + 1)
+        )
+
+        st.dataframe(
+            df_loans[
+                [
+                    "Sl.No",
+                    "loan_name",
+                    "lender",
+                    "amount",
+                    "remaining",
+                    "borrowed_date",
+                    "note"
+                ]
+            ].rename(
+                columns={
+                    "loan_name": "Loan Name",
+                    "lender": "Borrowed From",
+                    "amount": "Loan Amount",
+                    "borrowed_date": "Borrowed Date",
+                    "remaining": "Remaining Amount",
+                    "note": "Reason"
+                }
+            ),
+            width='stretch',
+            hide_index=True
+        )
+
+        st.divider()
+
+        # ✅ Select loan to edit
+        selected_loan_name = st.selectbox(
+            "Select Loan to Edit",
+            ["-- Select Loan --"] +
+            [l["loan_name"] for l in active_loans]
+        )
+
+        # ✅ Open edit section only after selection
+        if selected_loan_name != "-- Select Loan --":
+
+            loan = next(
+                l for l in active_loans
+                if l["loan_name"] == selected_loan_name
             )
-        else:
-            st.info("No active loans 🎉")
-    else:
-        st.info("No loans available")
 
-    completed_loans = [l for l in st.session_state.loans if l.get("status") == "Completed"]
+            st.subheader("✏️ Edit Loan")
+
+            ec1, ec2 = st.columns(2)
+
+            with ec1:
+
+                edit_name = st.text_input(
+                    "Loan Name",
+                    value=loan["loan_name"]
+                )
+
+                edit_lender = st.selectbox(
+                    "Lender",
+                    members,
+                    index=members.index(loan["lender"])
+                    if loan["lender"] in members else 0
+                )
+
+            with ec2:
+
+                edit_borrowed_date = st.date_input(
+                    "Borrowed Date",
+                    value=pd.to_datetime(
+                        loan["borrowed_date"]
+                    ).date(),
+                    max_value=date.today()
+                )
+
+                edit_note = st.text_input(
+                    "Note",
+                    value=loan.get("note", "")
+                )
+
+                topup_amount = st.number_input(
+                    "Top-up Amount",
+                    min_value=0.0,
+                    format="%.0f"
+                )
+
+            c1, c2, c3 = st.columns(3)
+
+            # ✅ UPDATE
+            with c1:
+
+                if st.button(
+                        "💾 Update Loan",
+                        width='stretch'
+                ):
+
+                    duplicate = any(
+                        l["loan_name"].lower() == edit_name.lower()
+                        and l != loan
+                        for l in st.session_state.loans
+                    )
+
+                    if duplicate:
+                        st.error(
+                            "Loan name already exists"
+                        )
+
+                    else:
+                        loan["loan_name"] = edit_name
+                        loan["lender"] = edit_lender
+                        loan["borrowed_date"] = str(edit_borrowed_date)
+                        loan["note"] = edit_note
+
+                        save_json(
+                            LOAN_FILE,
+                            st.session_state.loans
+                        )
+
+                        st.success("✅ Loan updated!")
+                        st.rerun()
+
+            # ✅ TOP-UP
+            with c2:
+
+                if st.button(
+                        "➕ Add Top-up",
+                        width='stretch'
+                ):
+
+                    if topup_amount <= 0:
+                        st.warning(
+                            "Enter valid top-up amount"
+                        )
+
+                    else:
+
+                        loan["amount"] += topup_amount
+                        loan["remaining"] += topup_amount
+
+                        save_json(
+                            LOAN_FILE,
+                            st.session_state.loans
+                        )
+
+                        st.success(
+                            f"✅ ₹ {topup_amount:,.0f} added to loan"
+                        )
+
+                        st.rerun()
+
+            # ✅ DELETE
+            with c3:
+
+                if st.button(
+                        "🗑️ Delete Loan",
+                        width='stretch',
+                        type="secondary"
+                ):
+                    st.session_state.loans.remove(loan)
+
+                    save_json(
+                        LOAN_FILE,
+                        st.session_state.loans
+                    )
+
+                    st.success("✅ Loan deleted!")
+                    st.rerun()
+
+    else:
+        st.info("No active loans 🎉")
+
+    # ─────────────────────────────────────────────
+    # COMPLETED LOANS
+    # ─────────────────────────────────────────────
+    completed_loans = [
+        l for l in st.session_state.loans
+        if l.get("status") == "Completed"
+    ]
 
     if completed_loans:
+        st.divider()
+
         st.subheader("✅ Completed Loans")
-        st.dataframe(pd.DataFrame(completed_loans), width='stretch')
+        for loan in completed_loans:
+
+            payments = loan.get("payments", [])
+
+            if payments:
+
+                loan["paid_date"] = payments[-1].get(
+                    "paid_date",
+                    ""
+                )
+
+            else:
+                loan["paid_date"] = ""
+
+        df_completed = pd.DataFrame(
+            completed_loans
+        )
+
+        df_completed.insert(
+            0,
+            "Sl.No",
+            range(1, len(df_completed) + 1)
+        )
+
+        st.dataframe(
+            df_completed[
+                [
+                    "Sl.No",
+                    "loan_name",
+                    "lender",
+                    "amount",
+                    "borrowed_date",
+                    "paid_date",
+                    "note"
+                ]
+            ].rename(
+                columns={
+                    "loan_name": "Loan Name",
+                    "lender": "Borrowed From",
+                    "amount": "Loan Amount",
+                    "borrowed_date": "Borrowed Date",
+                    "paid_date": "Loan Paid Date",
+                    "note": "Reason"
+                }
+            ),
+            width='stretch',
+            hide_index=True
+        )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 💳 EMIs
+# 💳 LOAN PAYMENTS
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.page == "💳 Loans Payments":
+
     st.title("💳 Loan Repayments & Summary")
 
     loans = st.session_state.loans
 
     if not loans:
         st.info("No loans available")
+
     else:
+
         df_loans = pd.DataFrame(loans)
+
+        df_loans["paid"] = (
+                df_loans["amount"] - df_loans["remaining"]
+        )
 
         st.subheader("📊 Loan Summary")
 
-        df_loans["paid"] = df_loans["amount"] - df_loans["remaining"]
-
         st.dataframe(
-            df_loans[["loan_name", "lender", "amount", "paid", "remaining", "status"]],
-            width='stretch'
+            df_loans[
+                [
+                    "loan_name",
+                    "lender",
+                    "amount",
+                    "paid",
+                    "remaining",
+                    "status"
+                ]
+            ].rename(
+                columns={
+                    "loan_name": "Loan Name",
+                    "lender": "Borrowed From",
+                    "amount": "Loan Amount",
+                    "paid": "Loan Amount Paid",
+                    "remaining": "Loan Remaining",
+                    "status": "Status"
+                }
+            ),
+            width='stretch',
+            hide_index=True
         )
 
         st.divider()
 
-        selected_loan = st.selectbox("Select Loan", df_loans["loan_name"])
+        # ✅ ONLY ACTIVE LOANS
+        active_loans = [
+            l for l in loans
+            if l.get("status") == "Active"
+        ]
 
-        loan = next(l for l in loans if l["loan_name"] == selected_loan)
+        if not active_loans:
+            st.success("🎉 All loans are completed")
+            st.stop()
 
-        st.write(f"Remaining: ₹ {loan['remaining']}")
+        loan_names = ["Select Loan"] + [l["loan_name"] for l in active_loans]
 
-        pay_amount = st.number_input("Pay Amount", min_value=0.0)
-
-        payment_type = st.selectbox(
-            "Payment Type",
-            PAYMENT_METHODS,
-            help="Select how the EMI was paid"
+        # ✅ Select only active loans
+        selected_loan = st.selectbox(
+            "Select Active Loan",
+            loan_names, index=0
         )
 
-        desc = st.text_input("Payment Note")
+        if selected_loan == "Select Loan":
+            st.info("Please select a loan to continue")
+            st.stop()
 
-        if st.button("Pay EMI"):
-            loan["remaining"] -= pay_amount
+        loan = next(
+            l for l in active_loans
+            if l["loan_name"] == selected_loan
+        )
 
-            payment = {
-                "amount": pay_amount,
-                "date": str(date.today()),
-                "payment_type": payment_type,
-                "note": desc
-            }
+        st.info(
+            f"Remaining Amount: ₹ {loan['remaining']:,.0f}"
+        )
 
-            loan["payments"].append(payment)
+        c1, c2 = st.columns(2)
 
-            # ✅ Update status automatically
-            if loan["remaining"] <= 0:
-                loan["remaining"] = 0
-                loan["status"] = "Completed"
+        with c1:
+            pay_amount = st.number_input(
+                "Pay Amount",
+                min_value=0.0,
+                step=10.0,
+                format="%.0f"
+            )
+
+            payment_date = st.date_input(
+                "Payment Date",
+                value=date.today(),
+                max_value=date.today()
+            )
+
+        with c2:
+            payment_type = st.selectbox(
+                "Payment Type",
+                PAYMENT_METHODS
+            )
+
+            desc = st.text_input(
+                "Payment Note"
+            )
+
+        # ✅ PAY BUTTON
+        if st.button("💰 Pay Loan", width='stretch'):
+
+            if pay_amount <= 0:
+                st.warning("Enter valid amount")
+
+            elif pay_amount > loan["remaining"]:
+                st.warning(
+                    "Payment cannot exceed remaining loan amount"
+                )
+
             else:
-                loan["status"] = "Active"
 
-            save_json(LOAN_FILE, loans)
-            st.success("Payment updated!")
-            st.rerun()
+                loan["remaining"] -= pay_amount
 
-        # 📅 Payment history
+                payment = {
+                    "amount": pay_amount,
+                    "paid_date": str(payment_date),
+                    "payment_type": payment_type,
+                    "note": desc
+                }
+
+                loan.setdefault("payments", []).append(payment)
+
+                # ✅ Auto complete
+                if loan["remaining"] <= 0:
+                    loan["remaining"] = 0
+                    loan["status"] = "Completed"
+
+                save_json(
+                    LOAN_FILE,
+                    st.session_state.loans
+                )
+
+                st.success("✅ EMI payment added!")
+                st.rerun()
+
+        # ─────────────────────────────────────────────
+        # PAYMENT HISTORY
+        # ─────────────────────────────────────────────
         if loan.get("payments"):
+            st.divider()
             st.subheader("📅 Payment History")
 
-            df_pay = pd.DataFrame(loan["payments"])
+            df_pay = pd.DataFrame(
+                loan["payments"]
+            )
+
+            df_pay.insert(
+                0,
+                "Sl.No",
+                range(1, len(df_pay) + 1)
+            )
 
             st.dataframe(
-                df_pay[["date", "amount", "payment_type", "note"]],
-                width='stretch'
+                df_pay[
+                    [
+                        "Sl.No",
+                        "paid_date",
+                        "amount",
+                        "payment_type",
+                        "note"
+                    ]
+                ],
+                width='stretch',
+                hide_index=True
             )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 🏦 Savings
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.page == "🏦 Savings":
+
     st.title("🏦 Savings / Bank Deposit")
 
-    bank = st.text_input("Bank Name (e.g. HDFC, SBI)")
     cfg = st.session_state.config
-    amount = st.number_input("Amount", min_value=0.0, format="%.0f")
-    saving_type = st.selectbox("Saving Type", cfg.get("saving_types", DEFAULT_SAVING_TYPES))
+    currency = cfg.get("currency", "₹")
 
-    source = st.selectbox("Source", ["Wife", "Kumar", "Other"])
+    # ─────────────────────────────────────────────
+    # ADD SAVINGS
+    # ─────────────────────────────────────────────
+    st.subheader("➕ Add Savings")
 
-    if st.button("Add Savings"):
-        entry = {
-            "amount": amount,
-            "bank": bank,
-            "type": saving_type,
-            "source": source,
-            "date": str(date.today())
-        }
-        st.session_state.savings.append(entry)
-        save_json(SAVINGS_FILE, st.session_state.savings)
-        st.success("Saved!")
+    c1, c2 = st.columns(2)
 
-    # 📊 Show Table instead of JSON
+    with c1:
+
+        bank = st.text_input(
+            "Bank Name",
+            placeholder="e.g. HDFC, SBI"
+        )
+
+        saving_type = st.selectbox(
+            "Saving Type",
+            cfg.get(
+                "saving_types",
+                DEFAULT_SAVING_TYPES
+            )
+        )
+
+    with c2:
+
+        amount = st.number_input(
+            "Amount",
+            min_value=0.0,
+            format="%.0f"
+        )
+
+        source = st.selectbox(
+            "Source",
+            ["Wife", "Kumar", "Other"]
+        )
+
+    saving_date = st.date_input(
+        "Deposit Date",
+        value=date.today(),
+        max_value=date.today()
+    )
+
+    if st.button(
+            "💾 Add Savings",
+            width='stretch',
+            type="primary"
+    ):
+
+        if amount <= 0:
+
+            st.warning("Enter valid amount")
+
+        else:
+
+            entry = {
+                "amount": amount,
+                "bank": bank,
+                "type": saving_type,
+                "source": source,
+                "date": str(saving_date)
+            }
+
+            st.session_state.savings.append(entry)
+
+            save_json(
+                SAVINGS_FILE,
+                st.session_state.savings
+            )
+
+            st.success("✅ Savings added!")
+            st.rerun()
+
+    # ─────────────────────────────────────────────
+    # SAVINGS TABLE
+    # ─────────────────────────────────────────────
     if st.session_state.savings:
-        df_sav = pd.DataFrame(st.session_state.savings)
-        st.dataframe(df_sav, width='stretch')
+
+        st.divider()
+
+        st.subheader("📊 Savings History")
+
+        df_sav = pd.DataFrame(
+            st.session_state.savings
+        )
+
+        df_sav.insert(
+            0,
+            "Sl.No",
+            range(1, len(df_sav) + 1)
+        )
+
+        st.dataframe(
+            df_sav[
+                [
+                    "Sl.No",
+                    "bank",
+                    "type",
+                    "source",
+                    "amount",
+                    "date"
+                ]
+            ].rename(
+                columns={
+                    "bank": "Bank",
+                    "type": "Type",
+                    "source": "Source",
+                    "amount": f"Amount ({currency})",
+                    "date": "Deposit Date"
+                }
+            ),
+            width='stretch',
+            hide_index=True
+        )
+
+        # ─────────────────────────────────────────
+        # EDIT SAVINGS
+        # ─────────────────────────────────────────
+        st.divider()
+
+        selected_saving = st.selectbox(
+            "Select Savings to Edit",
+            ["-- Select Savings --"] +
+            [
+                f"{s['bank']} - {currency} {s['amount']:,.0f}"
+                for s in st.session_state.savings
+            ]
+        )
+
+        if selected_saving != "-- Select Savings --":
+
+            saving_index = (
+                [
+                    f"{s['bank']} - {currency} {s['amount']:,.0f}"
+                    for s in st.session_state.savings
+                ].index(selected_saving)
+            )
+
+            saving = st.session_state.savings[
+                saving_index
+            ]
+
+            st.subheader("✏️ Edit Savings")
+
+            e1, e2 = st.columns(2)
+
+            with e1:
+
+                edit_bank = st.text_input(
+                    "Bank",
+                    value=saving["bank"]
+                )
+
+                edit_type = st.selectbox(
+                    "Saving Type",
+                    cfg.get(
+                        "saving_types",
+                        DEFAULT_SAVING_TYPES
+                    ),
+                    index=cfg.get(
+                        "saving_types",
+                        DEFAULT_SAVING_TYPES
+                    ).index(saving["type"])
+                    if saving["type"] in cfg.get(
+                        "saving_types",
+                        DEFAULT_SAVING_TYPES
+                    ) else 0
+                )
+
+                edit_saving_date = st.date_input(
+                    "Deposit Date",
+                    value=pd.to_datetime(
+                        saving["date"]
+                    ).date(),
+                    max_value=date.today(),
+                    key=f"edit_saving_date_{saving_index}"
+                )
+
+            with e2:
+
+                edit_amount = st.number_input(
+                    "Amount",
+                    min_value=0.0,
+                    value=float(saving["amount"]),
+                    format="%.0f"
+                )
+
+                source_options = [
+                    "Wife",
+                    "Kumar",
+                    "Other"
+                ]
+
+                edit_source = st.selectbox(
+                    "Source",
+                    source_options,
+                    index=source_options.index(
+                        saving["source"]
+                    )
+                    if saving["source"] in source_options
+                    else 0
+                )
+
+            c1, c2 = st.columns(2)
+
+            # UPDATE
+            with c1:
+
+                if st.button(
+                        "💾 Update Savings",
+                        width='stretch'
+                ):
+
+                    if edit_amount <= 0:
+
+                        st.warning(
+                            "Amount should be greater than 0"
+                        )
+
+                    else:
+
+                        st.session_state.savings[
+                            saving_index
+                        ] = {
+                            "amount": edit_amount,
+                            "bank": edit_bank,
+                            "type": edit_type,
+                            "source": edit_source,
+                            "date": str(edit_saving_date)
+                        }
+
+                        save_json(
+                            SAVINGS_FILE,
+                            st.session_state.savings
+                        )
+
+                        st.success(
+                            "✅ Savings updated!"
+                        )
+
+                        st.rerun()
+
+            # DELETE
+            with c2:
+
+                if st.button(
+                        "🗑️ Delete Savings",
+                        width='stretch',
+                        type="secondary"
+                ):
+                    st.session_state.savings.pop(
+                        saving_index
+                    )
+
+                    save_json(
+                        SAVINGS_FILE,
+                        st.session_state.savings
+                    )
+
+                    st.success(
+                        "✅ Savings deleted!"
+                    )
+
+                    st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 📋 ALL EXPENSES
@@ -761,53 +2380,171 @@ elif st.session_state.page == "📋 All Expenses":
 
     filtered = df[mask].sort_values("date", ascending=False).copy()
     st.markdown(f"**{len(filtered)} transactions** — Total: **{currency} {filtered['amount'].sum():,.2f}**")
-    disp = filtered[["date", "category", "description", "member", "payment_method", "amount", "notes"]].copy()
-    disp["amount"] = disp["amount"].apply(lambda x: f"{currency} {x:,.2f}")
-    st.dataframe(disp, width='stretch', hide_index=True)
 
-    st.divider()
-    st.subheader("✏️ Edit / Delete Expense")
     if not filtered.empty:
-        sel_id = st.selectbox("Select Expense",
-                              options=filtered["id"].tolist(),
-                              format_func=lambda x: (
-                                  f"#{x} — "
-                                  f"{filtered[filtered['id'] == x]['description'].values[0]} "
-                                  f"({currency} {filtered[filtered['id'] == x]['amount'].values[0]:,.2f})"
-                              ))
-        row = df[df["id"] == sel_id].iloc[0]
-        ec1, ec2 = st.columns(2)
-        with ec1:
-            new_desc = st.text_input("Description", value=row["description"], key="ed")
-            new_cat = st.selectbox("Category", CATS,
-                                   index=CATS.index(row["category"]) if row["category"] in CATS else 0, key="ec")
-            new_amount = st.number_input("Amount", value=float(row["amount"]), step=10.0, key="ea")
-        with ec2:
-            new_mem = st.selectbox("Member", MEMBER,
-                                   index=MEMBER.index(row["member"]) if row["member"] in MEMBER else 0, key="em")
-            new_pay = st.selectbox("Payment", PAYMENT_METHODS,
-                                   index=PAYMENT_METHODS.index(row["payment_method"]) if row[
-                                                                                             "payment_method"] in PAYMENT_METHODS else 0,
-                                   key="ep")
-            new_notes = st.text_area("Notes", value=row.get("notes", ""), key="en", height=68)
+        filtered = filtered.reset_index(drop=True)
+        filtered["Sl.No"] = range(1, len(filtered) + 1)
 
-        bc1, bc2 = st.columns(2)
-        with bc1:
-            if st.button("💾 Update", width='stretch', type="primary"):
-                df.loc[df["id"] == sel_id,
-                ["description", "category", "amount", "member", "payment_method", "notes"]] = \
-                    [new_desc, new_cat, new_amount, new_mem, new_pay, new_notes]
-                st.session_state.df = df
-                save_expenses(df)
-                st.success("Updated!")
-                st.rerun()
-        with bc2:
-            if st.button("🗑️ Delete", width='stretch', type="secondary"):
-                df = df[df["id"] != sel_id].reset_index(drop=True)
-                st.session_state.df = df
-                save_expenses(df)
-                st.success("Deleted!")
-                st.rerun()
+        disp = filtered[
+            ["Sl.No", "date", "category", "description",
+             "member", "payment_method", "amount", "notes"]
+        ].copy()
+
+        disp["amount"] = disp["amount"].apply(
+            lambda x: f"{currency} {x:,.2f}"
+        )
+
+        st.dataframe(
+            disp.rename(columns={
+                    "date": "Date",
+                    "category": "Category",
+                    "description": "Description",
+                    "member": "Member",
+                    "payment_method": "Payment Method",
+                    "amount": f"Amount ({currency})",
+                    "notes": "Reason"
+                }),
+            width='stretch',
+            hide_index=True
+        )
+
+        st.divider()
+        st.subheader("✏️ Edit / Delete Expense")
+
+        # ✅ Select using serial number
+        selected_sl = st.selectbox(
+            "Select Expense",
+            ["-- Select Expense --"] + filtered["Sl.No"].astype(str).tolist()
+        )
+
+        # ✅ Open only when selected
+        if selected_sl != "-- Select Expense --":
+
+            selected_sl = int(selected_sl)
+
+            selected_row = filtered[
+                filtered["Sl.No"] == selected_sl
+                ].iloc[0]
+
+            sel_id = selected_row["id"]
+
+            row = df[df["id"] == sel_id].iloc[0]
+
+            ec1, ec2 = st.columns(2)
+
+            # ─────────────────────────────────────────
+            # LEFT
+            # ─────────────────────────────────────────
+            with ec1:
+
+                new_desc = st.text_input(
+                    "Description",
+                    value=row["description"],
+                    key=f"ed_{sel_id}"
+                )
+
+                new_cat = st.selectbox(
+                    "Category",
+                    CATS,
+                    index=CATS.index(row["category"])
+                    if row["category"] in CATS else 0,
+                    key=f"ec_{sel_id}"
+                )
+
+                new_amount = st.number_input(
+                    "Amount",
+                    value=float(row["amount"]),
+                    step=10.0,
+                    key=f"ea_{sel_id}"
+                )
+
+            # ─────────────────────────────────────────
+            # RIGHT
+            # ─────────────────────────────────────────
+            with ec2:
+
+                new_mem = st.selectbox(
+                    "Member",
+                    MEMBER,
+                    index=MEMBER.index(row["member"])
+                    if row["member"] in MEMBER else 0,
+                    key=f"em_{sel_id}"
+                )
+
+                new_pay = st.selectbox(
+                    "Payment",
+                    PAYMENT_METHODS,
+                    index=PAYMENT_METHODS.index(
+                        row["payment_method"]
+                    )
+                    if row["payment_method"] in PAYMENT_METHODS else 0,
+                    key=f"ep_{sel_id}"
+                )
+
+                new_notes = st.text_area(
+                    "Notes",
+                    value=row.get("notes", ""),
+                    height=80,
+                    key=f"en_{sel_id}"
+                )
+
+            bc1, bc2 = st.columns(2)
+
+            # ✅ UPDATE
+            with bc1:
+
+                if st.button(
+                        "💾 Update Expense",
+                        width='stretch',
+                        key=f"update_{sel_id}"
+                ):
+                    df.loc[
+                        df["id"] == sel_id,
+                        [
+                            "description",
+                            "category",
+                            "amount",
+                            "member",
+                            "payment_method",
+                            "notes"
+                        ]
+                    ] = [
+                        new_desc,
+                        new_cat,
+                        new_amount,
+                        new_mem,
+                        new_pay,
+                        new_notes
+                    ]
+
+                    st.session_state.df = df
+
+                    save_expenses(df)
+
+                    st.success("✅ Expense updated!")
+
+                    st.rerun()
+
+            # ✅ DELETE
+            with bc2:
+
+                if st.button(
+                        "🗑️ Delete Expense",
+                        width='stretch',
+                        type="secondary",
+                        key=f"delete_{sel_id}"
+                ):
+                    df = df[
+                        df["id"] != sel_id
+                        ].reset_index(drop=True)
+
+                    st.session_state.df = df
+
+                    save_expenses(df)
+
+                    st.success("✅ Expense deleted!")
+
+                    st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 📊 CHARTS
@@ -817,99 +2554,159 @@ elif st.session_state.page == "📊 Charts":
     currency = cfg.get("currency", "₹")
     df = st.session_state.df.copy()
 
-    st.title("📊 Expense Charts")
+    st.title("📊 Expense Analytics Dashboard")
+
     if df.empty:
         st.info("No data to chart yet.")
         st.stop()
 
-    period = st.radio("Period", ["This Month", "Last 3 Months", "Last 6 Months", "This Year", "All Time", "Custom"],
-                      horizontal=True)
-    today = date.today()
-    if period == "This Month":
-        s, e = date(today.year, today.month, 1), today
-    elif period == "Last 3 Months":
-        s, e = today - timedelta(days=90), today
-    elif period == "Last 6 Months":
-        s, e = today - timedelta(days=180), today
-    elif period == "This Year":
-        s, e = date(today.year, 1, 1), today
-    elif period == "All Time":
-        s, e = df["date"].min(), df["date"].max()
-    else:
-        cr = st.date_input("Custom Range", value=(today - timedelta(days=30), today))
-        s, e = (cr[0], cr[1]) if len(cr) == 2 else (today - timedelta(days=30), today)
+    # ---------------------------
+    # 🔷 KPI SECTION
+    # ---------------------------
+    c1, c2, c3, c4 = st.columns(4)
 
-    plot_df = df[(df["date"] >= s) & (df["date"] <= e)]
-    if plot_df.empty:
-        st.warning("No data for the selected period.")
-        st.stop()
+    c1.metric("Total Spend", f"{currency}{df['amount'].sum():,.0f}")
+    c2.metric("Avg Expense", f"{currency}{df['amount'].mean():,.0f}")
+    c3.metric("Max Expense", f"{currency}{df['amount'].max():,.0f}")
+    c4.metric("Transactions", len(df))
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Category Distribution")
-        cs = plot_df.groupby("category")["amount"].sum().reset_index()
-        fig = px.pie(cs, names="category", values="amount",
-                     hole=0.4, color_discrete_sequence=CAT_COLORS)
-        fig.update_traces(textposition="inside", textinfo="percent+label")
-        fig.update_layout(showlegend=True, height=350, margin=dict(t=10, b=10))
-        st.plotly_chart(fig, width='stretch')
+    st.divider()
 
-    with c2:
-        st.subheader("Spending by Member")
-        ms2 = plot_df.groupby("member")["amount"].sum().reset_index().sort_values("amount", ascending=True)
-        fig2 = px.bar(ms2, x="amount", y="member", orientation="h",
-                      color="amount", color_continuous_scale="Teal", text_auto=".2s",
-                      labels={"amount": f"Amount ({currency})", "member": "Member"})
-        fig2.update_layout(showlegend=False, coloraxis_showscale=False, height=350, margin=dict(t=10, b=10))
-        st.plotly_chart(fig2, width='stretch')
+    # ---------------------------
+    # 🔷 CATEGORY ANALYSIS
+    # ---------------------------
+    st.subheader("📂 Category Wise Spending")
 
-    st.subheader("Daily Spending Trend")
-    daily = plot_df.groupby("date")["amount"].sum().reset_index()
-    fig3 = px.area(daily, x="date", y="amount",
-                   labels={"date": "Date", "amount": f"Amount ({currency})"},
-                   color_discrete_sequence=["#2c7bb6"])
-    fig3.update_layout(height=300, margin=dict(t=10, b=10))
+    cat_df = df.groupby("category")["amount"].sum().sort_values(ascending=True).reset_index()
+
+    fig1 = px.bar(
+        cat_df,
+        x="amount",
+        y="category",
+        orientation="h",
+        text_auto=".2s",
+        color="amount",
+        color_continuous_scale="Blues"
+    )
+    fig1.update_layout(height=400, margin=dict(t=10, b=10))
+    st.plotly_chart(fig1, width='stretch')
+
+    # ---------------------------
+    # 🔷 MEMBER ANALYSIS
+    # ---------------------------
+    st.subheader("👥 Member Wise Spending")
+
+    mem_df = df.groupby("member")["amount"].sum().sort_values(ascending=True).reset_index()
+
+    fig2 = px.bar(
+        mem_df,
+        x="amount",
+        y="member",
+        orientation="h",
+        text_auto=".2s",
+        color="amount",
+        color_continuous_scale="Teal"
+    )
+    fig2.update_layout(height=350, margin=dict(t=10, b=10))
+    st.plotly_chart(fig2, width='stretch')
+
+    # ---------------------------
+    # 🔷 PAYMENT METHOD
+    # ---------------------------
+    st.subheader("💳 Payment Method Breakdown")
+
+    pay_df = df.groupby("payment_method")["amount"].sum().reset_index()
+
+    fig3 = px.pie(
+        pay_df,
+        names="payment_method",
+        values="amount",
+        hole=0.4
+    )
+    fig3.update_traces(textposition="inside", textinfo="percent+label")
     st.plotly_chart(fig3, width='stretch')
 
-    c3, c4 = st.columns(2)
-    with c3:
-        st.subheader("Spending by Day of Week")
-        pf2 = plot_df.copy()
-        pf2["dow"] = pd.to_datetime(pf2["date"].astype(str)).dt.day_name()
-        dow_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        dow_sum = pf2.groupby("dow")["amount"].sum().reindex(dow_order).reset_index()
-        fig4 = px.bar(dow_sum, x="dow", y="amount",
-                      color="amount", color_continuous_scale="Oranges", text_auto=".2s",
-                      labels={"dow": "Day", "amount": f"Amount ({currency})"})
-        fig4.update_layout(coloraxis_showscale=False, height=300, margin=dict(t=10, b=10))
-        st.plotly_chart(fig4, width='stretch')
+    # ---------------------------
+    # 🔷 HEATMAP (NEW INSIGHT)
+    # ---------------------------
+    st.subheader("🔥 Member vs Category Heatmap")
 
-    with c4:
-        st.subheader("Payment Method Breakdown")
-        pay_sum = plot_df.groupby("payment_method")["amount"].sum().reset_index()
-        fig5 = px.pie(pay_sum, names="payment_method", values="amount",
-                      color_discrete_sequence=px.colors.qualitative.Set3)
-        fig5.update_traces(textposition="inside", textinfo="percent+label")
-        fig5.update_layout(showlegend=False, height=300, margin=dict(t=10, b=10))
-        st.plotly_chart(fig5, width='stretch')
+    heatmap_df = df.pivot_table(
+        index="member",
+        columns="category",
+        values="amount",
+        aggfunc="sum",
+        fill_value=0
+    )
 
-    limits = cfg.get("limits", {})
-    if limits:
-        st.subheader("🎯 Budget vs. Actual")
-        bv = [{"Category": c, "Spent": plot_df[plot_df["category"] == c]["amount"].sum(), "Budget": l}
-              for c, l in limits.items()]
-        bvdf = pd.DataFrame(bv)
-        fig6 = go.Figure()
-        fig6.add_trace(go.Bar(name="Spent", x=bvdf["Category"], y=bvdf["Spent"],
-                              marker_color="#2c7bb6",
-                              text=bvdf["Spent"].apply(lambda x: f"{currency}{x:,.0f}"),
-                              textposition="outside"))
-        fig6.add_trace(go.Bar(name="Budget", x=bvdf["Category"], y=bvdf["Budget"],
-                              marker_color="#d9534f", opacity=0.5,
-                              text=bvdf["Budget"].apply(lambda x: f"{currency}{x:,.0f}"),
-                              textposition="outside"))
-        fig6.update_layout(barmode="group", height=350, margin=dict(t=10, b=10))
-        st.plotly_chart(fig6, width='stretch')
+    fig4 = px.imshow(
+        heatmap_df,
+        text_auto=True,
+        aspect="auto"
+    )
+    st.plotly_chart(fig4, width='stretch')
+
+    # ---------------------------
+    # 🔷 EXPENSE DISTRIBUTION
+    # ---------------------------
+    st.subheader("📊 Expense Distribution")
+
+    fig5 = px.histogram(
+        df,
+        x="amount",
+        nbins=20
+    )
+    st.plotly_chart(fig5, width='stretch')
+
+    # ---------------------------
+    # 🧠 AI INSIGHTS
+    # ---------------------------
+    st.subheader("🧠 AI Insights Summary")
+
+    total = df["amount"].sum()
+    avg = df["amount"].mean()
+
+    top_category = df.groupby("category")["amount"].sum().idxmax()
+    top_category_val = df.groupby("category")["amount"].sum().max()
+
+    top_member = df.groupby("member")["amount"].sum().idxmax()
+    top_member_val = df.groupby("member")["amount"].sum().max()
+
+    top_payment = df.groupby("payment_method")["amount"].sum().idxmax()
+
+    insights = []
+
+    # Category dominance
+    cat_share = (top_category_val / total) * 100
+    if cat_share > 50:
+        insights.append(f"⚠️ Heavy spending in **{top_category}** ({cat_share:.1f}%).")
+    else:
+        insights.append(f"📊 Top category is **{top_category}** ({cat_share:.1f}%).")
+
+    # Member dominance
+    mem_share = (top_member_val / total) * 100
+    insights.append(f"👤 Highest spender: **{top_member}** ({mem_share:.1f}%).")
+
+    # Payment behavior
+    insights.append(f"💳 Most used payment method: **{top_payment}**.")
+
+    # Spending level
+    if avg > 5000:
+        insights.append("🔥 High average spending detected.")
+    elif avg > 2000:
+        insights.append("⚖️ Moderate spending pattern.")
+    else:
+        insights.append("✅ Controlled spending pattern.")
+
+    # Stability
+    std = df["amount"].std()
+    if std > avg:
+        insights.append("⚠️ Highly inconsistent spending pattern.")
+    else:
+        insights.append("📈 Stable spending behavior.")
+
+    for i, ins in enumerate(insights, 1):
+        st.write(f"{i}. {ins}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 🎯 BUDGET LIMITS
@@ -923,25 +2720,82 @@ elif st.session_state.page == "🎯 Budget Limits":
     tab1, tab2 = st.tabs(["💸 Category Limits", "⚙️ App Settings"])
 
     with tab1:
-        st.markdown("Set a monthly spending limit per category. Alerts fire at 80% and when exceeded.")
+
+        st.markdown(
+            "Set monthly spending limits only for categories you want to track."
+        )
+
         limits = cfg.get("limits", {})
 
+        # Existing limited categories
+        existing_limit_categories = list(limits.keys())
+
+        # Multi select categories
+        selected_limit_categories = st.multiselect(
+            "Select Categories for Budget Limits",
+            options=CATS,
+            default=existing_limit_categories
+        )
+
         with st.form("limits_form"):
+
             new_limits = {}
+
             cols = st.columns(2)
-            for i, cat in enumerate(CATS):
+
+            for i, cat in enumerate(selected_limit_categories):
+
                 with cols[i % 2]:
-                    val = st.number_input(cat, min_value=0.0,
-                                          value=float(limits.get(cat, 0)),
-                                          step=100.0, format="%.0f", key=f"lim_{i}",
-                                          help="0 = no limit")
+
+                    val = st.number_input(
+                        f"{cat} Limit",
+                        min_value=0.0,
+                        value=float(limits.get(cat, 0)),
+                        step=100.0,
+                        format="%.0f",
+                        key=f"lim_{cat}"
+                    )
+
                     if val > 0:
                         new_limits[cat] = val
-            if st.form_submit_button("💾 Save Limits", width='stretch', type="primary"):
+
+            submitted = st.form_submit_button(
+                "💾 Save Limits",
+                width='stretch',
+                type="primary"
+            )
+
+            if submitted:
                 cfg["limits"] = new_limits
+
                 save_config(cfg)
+
                 st.session_state.config = cfg
-                st.success("✅ Budget limits saved!")
+
+                st.success("✅ Budget limits updated!")
+
+        st.subheader("🎯 Savings Goal")
+
+        saving_goal = st.number_input(
+            "Target Savings Amount",
+            min_value=0.0,
+            value=float(cfg.get("saving_goal", 60000)),
+            step=1000.0,
+            format="%.0f"
+        )
+
+        if st.button(
+                "💾 Save Savings Goal",
+                width='stretch',
+                type="primary"
+        ):
+            cfg["saving_goal"] = saving_goal
+
+            save_config(cfg)
+
+            st.session_state.config = cfg
+
+            st.success("✅ Savings goal updated!")
 
     with tab2:
         st.subheader("App Settings")
@@ -962,15 +2816,55 @@ elif st.session_state.page == "🎯 Budget Limits":
         with st.expander("⚠️ Danger Zone"):
             st.warning("This will permanently delete all expense data.")
             confirm = st.checkbox("I understand this action cannot be undone")
-            if st.button("Delete All Data", disabled=not confirm, type="secondary"):
+
+            delete_password = st.text_input(
+                "Enter account password to confirm",
+                type="password",
+                placeholder="Enter your password"
+            )
+
+            # Validate password
+            valid_password = authenticate(
+                st.session_state.username,
+                delete_password
+            )
+
+            if delete_password and not valid_password:
+                st.error("❌ Incorrect password")
+
+            if st.button(
+                    "Delete All Data",
+                    disabled=(
+                            not confirm
+                            or not delete_password
+                            or not valid_password
+                    ),
+                    type="secondary"):
                 st.session_state.df = pd.DataFrame(
                     columns=["id", "date", "category", "description", "amount", "member", "payment_method", "notes"])
                 save_expenses(st.session_state.df)
-                st.success("All data deleted.")
-                st.rerun()
+                st.session_state.loans = []
+                save_json(LOAN_FILE,[])
+
+                st.session_state.savings = []
+                save_json(SAVINGS_FILE,[])
+
+                st.session_state.salary = []
+                save_json(SALARY_FILE,[])
+
+                cfg = st.session_state.config
+                cfg["limits"] = {}
+                cfg["saving_goal"] = DEFAULT_SAVING_GOAL
+                save_config(cfg)
+                st.session_state.config = cfg
+
+                st.success(
+                    "✅ All financial data deleted successfully."
+                )
+                # st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 🏷️ MANAGE LISTS  ← NEW PAGE
+# 🏷️ MANAGE LISTS
 # ══════════════════════════════════════════════════════════════════════════════
 elif st.session_state.page == "🏷️ Manage Lists":
     cfg = st.session_state.config
