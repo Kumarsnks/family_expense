@@ -1831,7 +1831,8 @@ elif st.session_state.page == "🤝 Loans":
     with c1:
         loan_name = st.text_input(
             "Loan Name",
-            placeholder="e.g. Bike Loan"
+            placeholder="e.g. Bike Loan",
+            key="loan_name"
         )
 
         lender = st.selectbox(
@@ -1840,19 +1841,24 @@ elif st.session_state.page == "🤝 Loans":
             key="loan_lender"
         )
 
-        note = st.text_input("Reason")
+        note = st.text_input(
+            "Reason",
+            key="loan_reason"
+        )
 
     with c2:
         amount = st.number_input(
             "Loan Amount",
             min_value=0.0,
-            format="%.0f"
+            format="%.0f",
+            key="loan_amount"
         )
 
         loan_date = st.date_input(
             "Borrowed Date",
             value=date.today(),
-            max_value=date.today()
+            max_value=date.today(),
+            key="loan_date"
         )
 
     # ✅ Duplicate validation
@@ -1871,6 +1877,7 @@ elif st.session_state.page == "🤝 Loans":
 
     if st.button(
             "Take Loan",
+            key="take_loan",
             disabled=duplicate_loan or not loan_name.strip() or amount <= 0,
             type="primary",
             width='stretch'
@@ -1946,8 +1953,8 @@ elif st.session_state.page == "🤝 Loans":
         # ✅ Select loan to edit
         selected_loan_name = st.selectbox(
             "Select Loan to Edit",
-            ["-- Select Loan --"] +
-            [l["loan_name"] for l in active_loans]
+            ["-- Select Loan --"] + [l["loan_name"] for l in active_loans],
+            key="selected_loan"
         )
 
         # ✅ Open edit section only after selection
@@ -1966,35 +1973,37 @@ elif st.session_state.page == "🤝 Loans":
 
                 edit_name = st.text_input(
                     "Loan Name",
-                    value=loan["loan_name"]
+                    value=loan["loan_name"],
+                    key=f"edit_name_{selected_loan_name}"
                 )
 
                 edit_lender = st.selectbox(
                     "Lender",
                     members,
-                    index=members.index(loan["lender"])
-                    if loan["lender"] in members else 0
+                    index=members.index(loan["lender"]) if loan["lender"] in members else 0,
+                    key=f"edit_lender_{selected_loan_name}"
                 )
 
             with ec2:
 
                 edit_borrowed_date = st.date_input(
                     "Borrowed Date",
-                    value=pd.to_datetime(
-                        loan["borrowed_date"]
-                    ).date(),
-                    max_value=date.today()
+                    value=pd.to_datetime(loan["borrowed_date"]).date(),
+                    max_value=date.today(),
+                    key=f"edit_borrowed_date_{selected_loan_name}"
                 )
 
                 edit_note = st.text_input(
                     "Note",
-                    value=loan.get("note", "")
+                    value=loan.get("note", ""),
+                    key=f"edit_note_{selected_loan_name}"
                 )
 
                 topup_amount = st.number_input(
                     "Top-up Amount",
                     min_value=0.0,
-                    format="%.0f"
+                    format="%.0f",
+                    key=f"topup_{selected_loan_name}"
                 )
 
             c1, c2, c3 = st.columns(3)
@@ -2004,6 +2013,7 @@ elif st.session_state.page == "🤝 Loans":
 
                 if st.button(
                         "💾 Update Loan",
+                        key=f"update_{selected_loan_name}",
                         width='stretch'
                 ):
 
@@ -2037,6 +2047,7 @@ elif st.session_state.page == "🤝 Loans":
 
                 if st.button(
                         "➕ Add Top-up",
+                        key=f"topup_btn_{selected_loan_name}",
                         width='stretch'
                 ):
 
@@ -2066,6 +2077,7 @@ elif st.session_state.page == "🤝 Loans":
 
                 if st.button(
                         "🗑️ Delete Loan",
+                        key=f"delete_{selected_loan_name}",
                         width='stretch',
                         type="secondary"
                 ):
