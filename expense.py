@@ -2337,15 +2337,14 @@ elif st.session_state.page == "🏦 Savings":
 
         bank = st.text_input(
             "Bank Name",
-            placeholder="e.g. HDFC, SBI"
+            placeholder="e.g. HDFC, SBI",
+            key="add_bank"
         )
 
         saving_type = st.selectbox(
             "Saving Type",
-            cfg.get(
-                "saving_types",
-                DEFAULT_SAVING_TYPES
-            )
+            cfg.get("saving_types", DEFAULT_SAVING_TYPES),
+            key="add_saving_type"
         )
 
     with c2:
@@ -2353,18 +2352,21 @@ elif st.session_state.page == "🏦 Savings":
         amount = st.number_input(
             "Amount",
             min_value=0.0,
-            format="%.0f"
+            format="%.0f",
+            key="add_amount"
         )
 
         source = st.selectbox(
             "Source",
-            ["Wife", "Kumar", "Other"]
+            ["Wife", "Kumar", "Other"],
+            key="add_saving_source"
         )
 
     saving_date = st.date_input(
         "Deposit Date",
         value=date.today(),
-        max_value=date.today()
+        max_value=date.today(),
+        key="add_saving_date"
     )
 
     if st.button(
@@ -2474,23 +2476,17 @@ elif st.session_state.page == "🏦 Savings":
 
                 edit_bank = st.text_input(
                     "Bank",
-                    value=saving["bank"]
+                    value=saving["bank"],
+                    key=f"edit_bank_{saving_index}"
                 )
 
                 edit_type = st.selectbox(
                     "Saving Type",
-                    cfg.get(
-                        "saving_types",
-                        DEFAULT_SAVING_TYPES
-                    ),
-                    index=cfg.get(
-                        "saving_types",
-                        DEFAULT_SAVING_TYPES
-                    ).index(saving["type"])
-                    if saving["type"] in cfg.get(
-                        "saving_types",
-                        DEFAULT_SAVING_TYPES
-                    ) else 0
+                    cfg.get("saving_types", DEFAULT_SAVING_TYPES),
+                    index=cfg.get("saving_types", DEFAULT_SAVING_TYPES).index(saving["type"])
+                    if saving["type"] in cfg.get("saving_types", DEFAULT_SAVING_TYPES)
+                    else 0,
+                    key=f"edit_type_{saving_index}"
                 )
 
                 edit_saving_date = st.date_input(
@@ -2508,7 +2504,8 @@ elif st.session_state.page == "🏦 Savings":
                     "Amount",
                     min_value=0.0,
                     value=float(saving["amount"]),
-                    format="%.0f"
+                    format="%.0f",
+                    key=f"edit_amount_{saving_index}"
                 )
 
                 source_options = [
@@ -2520,11 +2517,9 @@ elif st.session_state.page == "🏦 Savings":
                 edit_source = st.selectbox(
                     "Source",
                     source_options,
-                    index=source_options.index(
-                        saving["source"]
-                    )
-                    if saving["source"] in source_options
-                    else 0
+                    index=source_options.index(saving["source"])
+                    if saving["source"] in source_options else 0,
+                    key=f"edit_source_{saving_index}"
                 )
 
             c1, c2 = st.columns(2)
@@ -2534,11 +2529,11 @@ elif st.session_state.page == "🏦 Savings":
 
                 if st.button(
                         "💾 Update Savings",
-                        width='stretch'
-                ):
+                        key=f"update_saving_{saving_index}",
+                        width="stretch"
+                    ):
 
                     if edit_amount <= 0:
-
                         st.warning(
                             "Amount should be greater than 0"
                         )
@@ -2570,9 +2565,10 @@ elif st.session_state.page == "🏦 Savings":
             with c2:
 
                 if st.button(
-                        "🗑️ Delete Savings",
-                        width='stretch',
-                        type="secondary"
+                    "🗑️ Delete Savings",
+                    key=f"delete_saving_{saving_index}",
+                    width="stretch",
+                    type="secondary"
                 ):
                     st.session_state.savings.pop(
                         saving_index
