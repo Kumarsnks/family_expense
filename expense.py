@@ -1025,6 +1025,7 @@ if st.session_state.page == "🏠 Dashboard":
             current_salary
             - total_spent
             - loan_due
+            - kumar_savings
     )
 
     expense_ratio = (
